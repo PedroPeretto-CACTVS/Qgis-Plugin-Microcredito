@@ -32,7 +32,7 @@ def _plugin_version() -> str:
         try:
             return version("qgis-plugin-microcredito")
         except PackageNotFoundError:
-            return "0.9.4"
+            return "0.9.5"
 
 
 PLUGIN_VERSION = _plugin_version()

@@ -25,12 +25,15 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from qgis_plugin_microcredito.application.owner_documents import (
+    validate_report_owner_documents,
+)
+from qgis_plugin_microcredito.application.pre_analysis import build_pre_analysis
 from qgis_plugin_microcredito.domain.policy import (
     aggregate,
     evaluate_lists,
     list_message,
 )
-from qgis_plugin_microcredito.application.pre_analysis import build_pre_analysis
 
 from .map_output import MAP_PALETTE, MAP_STYLE_BY_CODE
 
@@ -381,6 +384,11 @@ def _attributes_text(attributes: dict[str, object]) -> str:
 def _report_payload(analysis: dict[str, object]) -> dict[str, object]:
     """Mantém no artefato somente evidências públicas, sem caminhos locais."""
     payload = copy.deepcopy(analysis)
+    payload["documentos_proprietario_possuidor"] = (
+        validate_report_owner_documents(
+            payload.get("documentos_proprietario_possuidor") or []
+        )
+    )
     outcomes = evaluate_lists(
         payload.get("mma_mcr") or [],
         payload.get("trabalho_escravo") or [],
@@ -395,7 +403,7 @@ def _report_payload(analysis: dict[str, object]) -> dict[str, object]:
         ]
     )
     payload["pre_analise"] = build_pre_analysis(payload)
-    payload["versao_motor"] = "0.9.4"
+    payload["versao_motor"] = "0.9.5"
     payload["versao_regras"] = payload["pre_analise"]["versao_regras"]
     recorded_decision = payload.get("decisao_tecnica") or {}
     if (
@@ -986,7 +994,6 @@ def _analysis_story(analysis: dict[str, object], styles, batch_document: str = "
         )
 
     story.append(Paragraph("Publicação MMA/MCR", s["Section"]))
-    mma = analysis.get("mma_mcr", [])
     mma_text = _escape(
         list_message(analysis.get("resultado_fontes", {}).get("mma_mcr"), "MMA/MCR")
     )

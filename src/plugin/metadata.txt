@@ -1,7 +1,7 @@
 [general]
 name=CAR Microcrédito
 description=Consulta Sicor e SICAR, atualiza bases assinadas e gera pré-análise socioambiental com mapa.
-version=0.9.4
+version=0.9.5
 qgisMinimumVersion=3.40
 qgisMaximumVersion=3.99
 author=Cactvs

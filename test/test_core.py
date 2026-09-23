@@ -13,6 +13,10 @@ from database.schema import initialize
 from plugin.batch import MAIN_HEADERS, read_xlsx_rows
 from qgis_plugin_microcredito.application.geo_service import build_glebas_geojson
 from qgis_plugin_microcredito.application.import_service import import_file
+from qgis_plugin_microcredito.application.owner_documents import (
+    require_owner_documents,
+    validate_report_owner_documents,
+)
 from qgis_plugin_microcredito.application.query_service import (
     find_by_car,
     find_by_document,
@@ -22,6 +26,7 @@ from qgis_plugin_microcredito.application.query_service import (
     find_slave_labor_by_documents,
 )
 from qgis_plugin_microcredito.domain.normalize import (
+    format_document,
     mask_document,
     normalize_car,
     normalize_document,
@@ -67,6 +72,48 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(normalize_car("MT-123.abc"), "MT123ABC")
         self.assertEqual(normalize_car("-1"), "")
         self.assertEqual(mask_document("123.456.789-01"), "***.***.***-01")
+        self.assertEqual(format_document("123.456.789-01"), "123.456.789-01")
+        self.assertEqual(format_document("11.222.333/0001-44"), "11.222.333/0001-44")
+
+    def test_owner_document_gate_rejects_borrower_only(self):
+        links = [
+            {
+                "documento_normalizado": "12345678901",
+                "tipo_vinculo": "mutuario_da_operacao",
+            }
+        ]
+        with self.assertRaisesRegex(ValueError, "proprietário/possuidor"):
+            require_owner_documents(links)
+
+    def test_owner_document_gate_accepts_direct_property_and_manual_documents(self):
+        links = [
+            {
+                "documento_normalizado": "12345678901",
+                "tipo_vinculo": "documento_na_propriedade",
+            },
+            {
+                "documento_normalizado": "12345678901",
+                "tipo_vinculo": "mutuario_da_operacao",
+            },
+            {
+                "documento_normalizado": "11222333000144",
+                "tipo_vinculo": "proprietario_possuidor_informado_manualmente",
+            },
+        ]
+        self.assertEqual(
+            require_owner_documents(links),
+            ["12345678901", "11222333000144"],
+        )
+        self.assertEqual(
+            validate_report_owner_documents(["123.456.789-01", "12345678901"]),
+            ["12345678901"],
+        )
+
+    def test_report_owner_gate_rejects_missing_or_incomplete_documents(self):
+        for values in ([], [""], ["***.***.***-91"], ["123"]):
+            with self.subTest(values=values):
+                with self.assertRaisesRegex(ValueError, "proprietário/possuidor"):
+                    validate_report_owner_documents(values)
 
     def test_import_and_find_direct_and_operation_links(self):
         borrowers = self._gz(

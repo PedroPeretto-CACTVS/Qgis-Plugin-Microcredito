@@ -262,7 +262,7 @@ class UpdateWindow(QDialog):
         setup_layout.addRow("Credencial do GitHub privado", self.auth_config)
 
         self.test_warning = QLabel(
-            "Atualização 0.9.4 por catálogo assinado: downloads grandes podem ser retomados; a credencial fica "
+            "Atualização 0.9.5 por catálogo assinado: downloads grandes podem ser retomados; a credencial fica "
             "no banco de autenticação criptografado do QGIS; nenhum CPF/CNPJ, CAR, geometria ou resultado de "
             "consulta é enviado ao GitHub."
         )

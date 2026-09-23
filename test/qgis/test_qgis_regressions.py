@@ -22,7 +22,7 @@ from qgis.PyQt.QtWidgets import QMessageBox
 
 from database.schema import initialize
 from database.session import connect
-from plugin import batch_window, plugin
+from plugin import batch_window, car_document_window, plugin
 from plugin.analysis import (
     AnalysisCancelled,
     EnvironmentalAnalyzer,
@@ -185,6 +185,7 @@ class QgisRegressionTests(unittest.TestCase):
                 "camadas": [],
             },
             "documentos_consultados_mte": ["12345678901"],
+            "documentos_proprietario_possuidor": ["12345678901"],
             "operacao": {"arquivo": str(self.root.resolve())},
             "documentos_associados": [{"arquivo": str(self.root.resolve())}],
             "evidencia_geometria": {
@@ -208,6 +209,23 @@ class QgisRegressionTests(unittest.TestCase):
             ),
             ["12345678901", "98765432000110"],
         )
+
+    def test_car_document_lookup_displays_complete_documents(self):
+        window = car_document_window.CarDocumentWindow(Iface(), plugin._load_core)
+        window.results = [
+            {
+                "documento_normalizado": "12345678901",
+                "tipo_vinculo": "documento_na_propriedade",
+            },
+            {
+                "documento_normalizado": "11222333000144",
+                "tipo_vinculo": "mutuario_da_operacao",
+            },
+        ]
+        window._fill_table()
+        self.assertEqual(window.table.item(0, 1).text(), "123.456.789-01")
+        self.assertEqual(window.table.item(1, 1).text(), "11.222.333/0001-44")
+        window.close()
 
     def test_map_legend_uses_unique_intersection_area_from_analysis(self):
         analysis = {
@@ -295,6 +313,15 @@ class QgisRegressionTests(unittest.TestCase):
         self.assertFalse(
             any(path.name.startswith(".r_") for path in self.root.iterdir())
         )
+
+    def test_report_refuses_missing_owner_document(self):
+        analysis = {
+            **self.analysis(),
+            "documentos_proprietario_possuidor": [],
+        }
+        with self.assertRaisesRegex(ValueError, "proprietário/possuidor"):
+            write_report(analysis, self.root / "missing-owner.pdf")
+        self.assertFalse((self.root / "missing-owner.pdf").exists())
 
     def test_report_paginates_large_mte_document_list_and_preserves_full_json(self):
         documents = [f"{number:011d}" for number in range(785)]
