@@ -24,6 +24,16 @@ def mask_document(value: object) -> str:
     return "Documento indisponível"
 
 
+def format_document(value: object) -> str:
+    """Exibe integralmente um CPF/CNPJ válido com pontuação legível."""
+    digits = normalize_document(value)
+    if len(digits) == 11:
+        return f"{digits[:3]}.{digits[3:6]}.{digits[6:9]}-{digits[9:]}"
+    if len(digits) == 14:
+        return f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}/{digits[8:12]}-{digits[12:]}"
+    return "Documento indisponível"
+
+
 def is_masked_document(value: object) -> bool:
     text = str(value or "")
     return bool(text) and any(marker in text for marker in ("*", "X", "x"))
