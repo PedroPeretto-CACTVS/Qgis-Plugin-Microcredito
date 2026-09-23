@@ -174,7 +174,7 @@ class ImportResult:
     ignorado: bool = False
 
     def as_record(self) -> ImportRecord:
-        return ImportRecord.model_validate(self.__dict__)
+        return ImportRecord(**self.__dict__)
 
 
 def _value(row: dict[str, str], aliases: Iterable[str]) -> str:

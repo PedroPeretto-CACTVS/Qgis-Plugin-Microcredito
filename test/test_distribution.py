@@ -1,6 +1,8 @@
 import hashlib
 import json
 import shutil
+import subprocess
+import sys
 import unittest
 import zipfile
 from pathlib import Path
@@ -31,6 +33,8 @@ class DistributionTests(unittest.TestCase):
                     self.assertEqual(hashlib.sha256(content).hexdigest(), checksum)
                     if name.endswith(".py"):
                         compile(content, name, "exec")
+                        self.assertNotIn(b"from pydantic", content)
+                        self.assertNotIn(b"import pydantic", content)
                 self.assertTrue(
                     any(name.endswith("domain/policy.py") for name in manifest)
                 )
@@ -45,3 +49,32 @@ class DistributionTests(unittest.TestCase):
             (folder / "AC_AREA_IMOVEL.gpkg").write_bytes(b"invalid")
         with self.assertRaisesRegex(ValueError, "exatamente uma vez"):
             validate_inputs(self.root)
+
+    def test_qgis_runtime_core_does_not_require_pydantic_or_sqlalchemy(self):
+        source = Path(__file__).resolve().parents[1] / "src"
+        script = f"""
+import importlib.abc
+import sys
+
+class BlockExternalRuntimeDependencies(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.', 1)[0] in {{'pydantic', 'sqlalchemy'}}:
+            raise ModuleNotFoundError(fullname)
+        return None
+
+sys.meta_path.insert(0, BlockExternalRuntimeDependencies())
+sys.path.insert(0, {str(source)!r})
+import database.schema
+import database.session
+import qgis_plugin_microcredito.application.query_service
+import qgis_plugin_microcredito.domain.models
+print('runtime-core-ok')
+"""
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("runtime-core-ok", result.stdout)
