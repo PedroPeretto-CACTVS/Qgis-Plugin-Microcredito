@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.coverage
+htmlcov/
+.coverage.*
+
+# Operational geodata
+dados/
+homologacao/
+*.db
+*.sqlite
+*.sqlite3
+*.gpkg
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.geojson
+
+# Build artifacts
+dist/
+build/
+installation_stage/
+validation/
+output/
+resultados/
+tmp/
+.test-data/
+*.zip
+*.part
+*.log
+
+# Local config
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini

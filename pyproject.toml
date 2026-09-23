@@ -1,0 +1,104 @@
+[project]
+name = "qgis-plugin-microcredito"
+version = "0.8.0"
+description = "Triagem socioambiental de CAR para apoio à análise de microcrédito rural"
+readme = "README.md"
+authors = [
+    { name = "Pedro Peretto", email = "pedro.peretto@cactvs.com.br" },
+    { name = "André Marchetti", email = "andre.marchetti@cactvs.com.br" },
+]
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.16.0",
+    "pydantic>=2.13.5",
+    "reportlab>=4.4.0",
+    "sqlalchemy>=2.0.53",
+    "typer>=0.19.0",
+]
+
+[project.scripts]
+car-microcredito = "cli.admin:main"
+qgis-plugin-microcredito = "cli.admin:main"
+car-microcredito-installer = "installer.cli:main"
+build = "installer.plugin_build:main"
+install = "installer.cli:install_entrypoint"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+dev-mode-dirs = ["src"]
+
+[tool.hatch.build.targets.wheel]
+only-include = [
+    "qgis_plugin_microcredito",
+    "database",
+    "cli",
+    "installer",
+]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/qgis_plugin_microcredito" = "qgis_plugin_microcredito"
+"src/database" = "database"
+"src/cli" = "cli"
+"src/installer" = "installer"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.7",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+src = ["src", "test"]
+extend-exclude = ["src/plugin"]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "B",
+    "UP",
+]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"test/qgis/**" = ["E402"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+files = [
+    "src/qgis_plugin_microcredito",
+    "src/database",
+    "src/cli",
+    "src/installer",
+]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["qgis_plugin_microcredito.application.batch_xlsx"]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+pythonpath = ["src"]
+testpaths = ["test"]
+markers = [
+    "qgis: tests that require a QGIS/PyQGIS runtime",
+]
+addopts = "-ra -q --cov=qgis_plugin_microcredito --cov=database --cov=cli --cov=installer --cov-report=term-missing"
