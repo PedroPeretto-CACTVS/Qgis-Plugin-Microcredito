@@ -27,7 +27,27 @@ O FNO e o FCO rural usam recursos sujeitos aos impedimentos socioambientais do M
 
 Para o FCO 2026, a Programação oficial exige cumprimento da legislação ambiental durante a vigência do financiamento, recibo de inscrição no CAR conforme o MCR em condições rurais aplicáveis, descrição das imposições ambientais e envio de licenças, outorgas, Certoh ou EIA/Rima quando existentes. Também deixa garantias, fiscalização, projeto técnico, assistência técnica, forma de pagamento e aspectos de liberação para a instituição financeira. Por isso, a Programação pública não substitui o manual operacional do agente.
 
-A nova Programação FNO 2026 foi aprovada pela Resolução Condel/Sudam nº 141, de 23/02/2026. A conferência final do fluxo de liberação depende da versão integral vigente da Programação FNO 2026 e do manual/checklist da instituição operadora ou repassadora.
+A Programação FNO 2026 vigente está disponível no MIDR e foi aprovada em nova versão pela Resolução Condel/Sudam nº 141, de 23/02/2026. Para o PNMPO Rural operado por instituição repassadora, ela manda observar as normas do crédito rural e atribui à operadora o risco, o controle e o envio periódico de informações. Em atividades florestais, exige, conforme o caso, licença, PMFS/POA e AUTEX/AUTEF. A Programação pública ainda não substitui o contrato de repasse nem o manual/checklist operacional interno da instituição.
+
+## Vocabulário exibido no plugin
+
+Os identificadores `mutuarios`, `propriedades`, `operacoes`, `complementos` e `glebas` são componentes técnicos da importação Sicor. Eles não são exibidos ao analista como se fossem cinco requisitos independentes. A tela de atualização os organiza assim:
+
+| Nome apresentado ao analista | Componentes/fonte | Necessidade atendida | Limite declarado |
+|---|---|---|---|
+| Operação de crédito e vínculos CPF/CNPJ–CAR — Sicor/BCB | mutuários, propriedades, operações e complementos | Identificar operação, beneficiário, imóvel, fonte/programa | O vínculo não comprova sozinho titularidade ou elegibilidade. |
+| Área financiada e geometria das glebas — Sicor/BCB | glebas | Delimitar a geometria declarada da operação | Não substitui a área contínua efetivamente explorada. |
+| Impedimentos ambientais publicados para o crédito rural — MMA/MCR | publicação MMA/MCR | Triagem dos impedimentos publicados | Requer conferência de vigência, motivo e exceções. |
+| Impedimento social: Cadastro de Empregadores — MTE/MCR | lista federal do MTE | Consulta dos documentos associados ao CAR | Cobre a lista federal, não todas as fontes trabalhistas. |
+| Situação cadastral e geometria dos imóveis rurais — SICAR | arquivos estaduais do CAR | Localização e evidência cadastral | A situação vigente deve ser confirmada no SICAR. |
+| Embargos ambientais vigentes — Ibama (cobertura federal) | Ibama | Cruzamento territorial | Não cobre sozinho órgãos estaduais e ICMBio. |
+| Terras indígenas: interferência e exceções — MCR | camada oficial | Cruzamento territorial e encaminhamento documental | Sobreposição não é reprovação automática. |
+| Territórios quilombolas: interferência e exceções — MCR | Incra/Ibama | Cruzamento territorial e encaminhamento documental | Exige confirmar condição do beneficiário e exceções. |
+| Unidades de conservação: categoria e autorização — MCR | camada oficial | Cruzamento territorial | Exige categoria, plano de manejo e eventual autorização. |
+| Florestas públicas tipo B não destinadas — MCR | CNFP | Cruzamento territorial | A camada precisa ser filtrada; nem toda floresta pública é impeditiva. |
+| PRODES após 2020 — cobertura parcial da regra desde 31/07/2019 | PRODES | Evidência de supressão | A cobertura atual é incompleta para a data inicial do MCR. |
+
+Licença, alvará, outorga, CCIR, projeto técnico, garantias, assistência técnica, fiscalização e condições de desembolso não são renomeados como “bases”. Eles pertencem ao checklist documental e ao fluxo decisório da instituição.
 
 ## Fluxo de decisão proposto
 
@@ -48,4 +68,6 @@ A nova Programação FNO 2026 foi aprovada pela Resolução Condel/Sudam nº 141
 - Resolução CMN nº 5.267/2025: https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?numero=5267&tipo=Resolu%C3%A7%C3%A3o+CMN
 - Resolução CMN nº 5.303/2026: https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?numero=5303&tipo=Resolu%C3%A7%C3%A3o+CMN
 - Programação FCO 2026: https://www.gov.br/sudeco/pt-br/assuntos/fundo-constitucional-de-financiamento-do-centro-oeste/programacao-anual-de-financiamento/programacao-2026/Programacao_FCO_2026_3ED_jp.pdf
+- Cartilha FCO 2026: https://www.gov.br/sudeco/pt-br/assuntos/fundo-constitucional-de-financiamento-do-centro-oeste/publicacoes-e-informacoes-gerenciais/CartilhaFCO2026v424Mar2026compactada.pdf
 - Resoluções Condel/Sudam, incluindo FNO 2026: https://www.gov.br/sudam/pt-br/composicao-1/condel/notas-e-resolucoes
+- Programação Financeira FNO 2026: https://www.gov.br/mdr/pt-br/assuntos/fundos-regionais-e-incentivos-fiscais/fundos-constitucionais-de-financiamento-fno-fne-e-fco/fundo-constitucional-de-financiamento-do-norte-fno/ProgramaoFinanceiraFNO2026.pdf
