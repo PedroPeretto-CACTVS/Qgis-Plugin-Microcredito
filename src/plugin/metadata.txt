@@ -1,7 +1,7 @@
 [general]
 name=CAR Microcrédito
-description=Consulta Sicor e SICAR, cruza bases socioambientais e gera relatório com mapa.
-version=0.8.0
+description=Consulta Sicor e SICAR, atualiza bases assinadas e gera pré-análise socioambiental com mapa.
+version=0.9.4
 qgisMinimumVersion=3.40
 qgisMaximumVersion=3.99
 author=Cactvs
@@ -9,4 +9,4 @@ email=
 category=Vector
 icon=icon.svg
 experimental=True
-about=Triagem nacional de CAR com consulta individual e lote para usuário supremo, PDF consolidado por CPF/CNPJ, embargos, terras indígenas, territórios quilombolas, unidades de conservação, florestas públicas, PRODES e cadastro do MTE. Os resultados são evidências para revisão, não decisão automática de crédito.
+about=Pré-análise nacional de CAR com consulta individual e em lote, consulta controlada de CPF/CNPJ por CAR, atualização local assinada e reversível de bases, PDF consolidado por CPF/CNPJ, embargos, terras indígenas, territórios quilombolas, unidades de conservação, florestas públicas, PRODES e cadastro do MTE. Os resultados apoiam a decisão humana e não aprovam nem recusam crédito automaticamente.

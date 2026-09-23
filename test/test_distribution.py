@@ -39,8 +39,18 @@ class DistributionTests(unittest.TestCase):
                     any(name.endswith("domain/policy.py") for name in manifest)
                 )
                 self.assertIn("worker.py", manifest)
+                for required in (
+                    "car_document_window.py",
+                    "update_window.py",
+                    "lib/qgis_plugin_microcredito/domain/base_catalog.py",
+                    "lib/qgis_plugin_microcredito/domain/financing.py",
+                    "lib/qgis_plugin_microcredito/domain/models.py",
+                    "lib/qgis_plugin_microcredito/application/pre_analysis.py",
+                    "lib/qgis_plugin_microcredito/infrastructure/updates.py",
+                ):
+                    self.assertIn(required, manifest)
                 self.assertEqual("supreme_mode.txt" in manifest, supreme)
-                self.assertIn(b"version=0.8.0", archive.read(package + "/metadata.txt"))
+                self.assertIn(b"version=0.9.4", archive.read(package + "/metadata.txt"))
 
     def test_twenty_seven_duplicate_states_do_not_pass(self):
         for index in range(27):
