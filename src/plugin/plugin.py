@@ -135,8 +135,10 @@ class CarMicrocreditoPlugin:
         self.iface = iface
         self.action = None
         self.batch_action = None
+        self.update_action = None
         self.window = None
         self.batch_window = None
+        self.update_window = None
         self.results = []
 
     def initGui(self):
@@ -152,6 +154,11 @@ class CarMicrocreditoPlugin:
         )
         self.iface.addPluginToMenu("CAR Microcrédito", self.action)
         self.iface.addToolBarIcon(self.action)
+        self.update_action = QAction(
+            icon, "Bases de consulta e atualizações", self.iface.mainWindow()
+        )
+        self.update_action.triggered.connect(self.show_update_window)
+        self.iface.addPluginToMenu("CAR Microcrédito", self.update_action)
         if SUPREME_MODE:
             self.batch_action = QAction(
                 icon, "Consulta individual", self.iface.mainWindow()
@@ -165,6 +172,8 @@ class CarMicrocreditoPlugin:
             self.iface.removeToolBarIcon(self.action)
         if self.batch_action:
             self.iface.removePluginMenu("CAR Microcrédito", self.batch_action)
+        if self.update_action:
+            self.iface.removePluginMenu("CAR Microcrédito", self.update_action)
 
     def show_window(self):
         if self.window is None:
@@ -181,6 +190,16 @@ class CarMicrocreditoPlugin:
         self.batch_window.show()
         self.batch_window.raise_()
         self.batch_window.activateWindow()
+
+    def show_update_window(self):
+        if self.update_window is None:
+            from .update_window import UpdateWindow
+
+            self.update_window = UpdateWindow(self.iface)
+        self.update_window.show()
+        self.update_window.raise_()
+        self.update_window.activateWindow()
+
 
 class SearchWindow(QDialog):
     COLUMNS = (

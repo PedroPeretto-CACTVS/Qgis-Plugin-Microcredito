@@ -205,6 +205,7 @@ def _begin_import(
     digest: str,
     escopo: str,
     validade_ate: str | None,
+    source_reference: str | None,
 ) -> tuple[int, bool]:
     existing = connection.execute(
         "SELECT id, escopo FROM importacao WHERE tipo = ? AND sha256 = ?",
@@ -219,7 +220,7 @@ def _begin_import(
     cursor = connection.execute(
         "INSERT INTO importacao (tipo, arquivo, sha256, escopo, ativo, validade_ate) "
         "VALUES (?, ?, ?, ?, 0, ?)",
-        (tipo, str(path.resolve()), digest, escopo, validade_ate),
+        (tipo, source_reference or str(path.resolve()), digest, escopo, validade_ate),
     )
     row_id = cursor.lastrowid
     if row_id is None:
@@ -249,6 +250,7 @@ def import_file(
     escopo: str = "nacional",
     validade_ate: str | None = None,
     commit: bool = True,
+    source_reference: str | None = None,
 ) -> ImportResult:
     if not escopo.strip():
         raise ValueError("Informe a competência e abrangência no escopo da carga.")
@@ -258,7 +260,14 @@ def import_file(
         date.fromisoformat(validade_ate)
     connection.execute("SAVEPOINT carga")
     try:
-        result = _import_file(connection, tipo, file_path, escopo.strip(), validade_ate)
+        result = _import_file(
+            connection,
+            tipo,
+            file_path,
+            escopo.strip(),
+            validade_ate,
+            source_reference,
+        )
         connection.execute("RELEASE carga")
         if commit:
             connection.commit()
@@ -275,6 +284,7 @@ def _import_file(
     file_path: str | Path,
     escopo: str,
     validade_ate: str | None,
+    source_reference: str | None,
 ) -> ImportResult:
     path = Path(file_path)
     if not path.is_file():
@@ -284,7 +294,13 @@ def _import_file(
 
     digest = file_sha256(path)
     import_id, ignored = _begin_import(
-        connection, tipo, path, digest, escopo, validade_ate
+        connection,
+        tipo,
+        path,
+        digest,
+        escopo,
+        validade_ate,
+        source_reference,
     )
     if ignored:
         row = connection.execute(
