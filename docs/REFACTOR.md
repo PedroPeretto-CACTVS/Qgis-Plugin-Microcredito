@@ -4,7 +4,7 @@ This document is the single source of truth for refactoring this repository. An 
 
 **Product (one sentence):** Local automation for socio-environmental triage of rural microcredit operations — imports Sicor/MMA/MTE data, cross-checks CAR geometry against national environmental layers in QGIS, and produces PDF + JSON evidence for human review (never automatic credit approval).
 
-**Current version:** `0.8.0` (`pyproject.toml`, `qgis_plugin/car_microcredito_qgis/metadata.txt`)
+**Baseline described by this historical refactor plan:** `0.8.0`. The active release is defined by `pyproject.toml` and `src/plugin/metadata.txt`.
 
 ---
 
