@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Annotated
 
@@ -9,6 +10,12 @@ from installer.constants import PLUGIN_VERSION
 from installer.install import install_package
 from installer.package_build import build_package
 from installer.plugin_build import main as plugin_build_main
+from installer.update_package import (
+    STRATEGIES,
+    _payload_map,
+    _value_map,
+    build_update_package,
+)
 from installer.verify import verify_package
 
 app = typer.Typer(
@@ -72,6 +79,37 @@ def package_build_cmd(
     for item in variants:
         path = build_package(item, dados, output_directory)
         typer.echo(str(path))
+
+
+@app.command("update-package")
+def update_package_cmd(
+    identifier: Annotated[str, typer.Option("--id")],
+    version: Annotated[str, typer.Option()],
+    strategy: Annotated[str, typer.Option(help=f"Uma de: {', '.join(STRATEGIES)}")],
+    payload: Annotated[
+        list[str], typer.Option("--payload", help="NOME=CAMINHO; opção repetível")
+    ],
+    output: Annotated[Path, typer.Option()],
+    provides: Annotated[list[str] | None, typer.Option("--provides")] = None,
+    payload_scope: Annotated[list[str] | None, typer.Option("--payload-scope")] = None,
+    target: Annotated[str | None, typer.Option()] = None,
+    foreign_feature_count: Annotated[
+        int, typer.Option("--foreign-feature-count", min=0, max=1000)
+    ] = 0,
+) -> None:
+    """Monta um pacote de base; a assinatura do catálogo ocorre externamente."""
+    result = build_update_package(
+        identifier,
+        version,
+        strategy,
+        _payload_map(payload),
+        output,
+        target=target,
+        provides=tuple(provides or ()) or None,
+        payload_scopes=_value_map(payload_scope or [], "--payload-scope"),
+        foreign_feature_count=foreign_feature_count,
+    )
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def main() -> None:
