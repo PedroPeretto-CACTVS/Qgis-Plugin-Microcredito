@@ -17,6 +17,7 @@ from qgis.core import (
 )
 
 from qgis_plugin_microcredito.application.hashing import file_sha256
+from qgis_plugin_microcredito.domain.base_catalog import definition_for
 
 
 class AnalysisCancelled(RuntimeError):
@@ -41,10 +42,15 @@ class EnvironmentalSource:
 
 def default_sources(base_directory: str | Path) -> list[EnvironmentalSource]:
     base = Path(base_directory)
+
+    def label(identifier: str, fallback: str) -> str:
+        definition = definition_for(identifier)
+        return definition.label if definition else fallback
+
     return [
         EnvironmentalSource(
             "embargos",
-            "Embargos ambientais",
+            label("embargos", "Embargos ambientais"),
             base / "embargos.gpkg",
             "https://dadosabertos.ibama.gov.br/dataset/termos-de-embargo",
             ("NUM_TAD", "NUM_EMBARGO", "SITUACAO", "DES_STATUS", "NOME_EMBARG"),
@@ -53,7 +59,7 @@ def default_sources(base_directory: str | Path) -> list[EnvironmentalSource]:
         ),
         EnvironmentalSource(
             "terras_indigenas",
-            "Terras indígenas",
+            label("terras_indigenas", "Terras indígenas"),
             base / "terras_indigenas.gpkg",
             "https://terrabrasilis.dpi.inpe.br/downloads/",
             ("terrai_nom", "fase_ti", "modalidade", "etnia_nome"),
@@ -62,7 +68,7 @@ def default_sources(base_directory: str | Path) -> list[EnvironmentalSource]:
         ),
         EnvironmentalSource(
             "territorios_quilombolas",
-            "Territórios quilombolas",
+            label("territorios_quilombolas", "Territórios quilombolas"),
             base / "territorios_quilombolas.gpkg",
             "https://pamgia.ibama.gov.br/server/rest/services/BasesSincronizadas/lim_quilombos_incra_a/MapServer/0",
             ("nm_comunid", "nm_municip", "cd_uf", "st_titulad", "fase", "responsave"),
@@ -71,7 +77,7 @@ def default_sources(base_directory: str | Path) -> list[EnvironmentalSource]:
         ),
         EnvironmentalSource(
             "unidades_conservacao",
-            "Unidades de conservação",
+            label("unidades_conservacao", "Unidades de conservação"),
             base / "unidades_conservacao.gpkg",
             "https://terrabrasilis.dpi.inpe.br/downloads/",
             ("nome_uc", "categoria", "grupo", "esfera", "orgao_gest"),
@@ -80,16 +86,30 @@ def default_sources(base_directory: str | Path) -> list[EnvironmentalSource]:
         ),
         EnvironmentalSource(
             "florestas_publicas",
-            "Florestas públicas",
+            label("florestas_publicas", "Florestas públicas"),
             base / "florestas_publicas.gpkg",
             "https://dados.florestal.gov.br/pt_BR/dataset/cadastro-nacional-de-florestas-publicas-cnfp",
-            ("nome", "tipo", "categoria", "situacao", "destinacao"),
+            (
+                "nome",
+                "tipo",
+                "categoria",
+                "protecao",
+                "governo",
+                "classe",
+                "orgao",
+                "atolegal",
+                "estagio",
+                "observacao",
+            ),
             "MCR 2-9 (florestas públicas tipo B)",
-            "A ocorrência só é impeditiva após confirmar tipo B, ausência de destinação e exceções previstas no MCR.",
+            "Confirmar Tipo B e avaliar as exceções: imóvel registrado ou, sob "
+            "condições cumulativas, imóvel de até 15 módulos fiscais.",
         ),
         EnvironmentalSource(
             "desmatamento_pos_2020",
-            "Desmatamento PRODES após 2020",
+            label(
+                "desmatamento_pos_2020", "Desmatamento PRODES após 2020"
+            ),
             base / "desmatamento_pos_2020.gpkg",
             "https://terrabrasilis.dpi.inpe.br/downloads/",
             (

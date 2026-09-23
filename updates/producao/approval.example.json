@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "catalog_sha256": "SUBSTITUIR_PELO_SHA256_DE_CATALOG_CANDIDATE_JSON",
+  "prepared_by": "PREENCHER_RESPONSAVEL_PREPARACAO",
+  "approved_by": "PREENCHER_RESPONSAVEL_APROVACAO_DISTINTO",
+  "approved_at": "AAAA-MM-DDThh:mm:ss-03:00",
+  "approval_reference": "PREENCHER_ATA_OU_CHAMADO_DE_APROVACAO"
+}

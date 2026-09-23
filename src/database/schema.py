@@ -5,11 +5,6 @@ from __future__ import annotations
 import sqlite3
 from datetime import date
 
-from sqlalchemy.dialects.sqlite import dialect as sqlite_dialect
-from sqlalchemy.schema import CreateIndex, CreateTable
-
-from database.models import Base
-
 SCHEMA_VERSION = 3
 
 # Pre-v3 CREATE script used to reconstruct historical files in tests.
@@ -148,7 +143,32 @@ CREATE TABLE IF NOT EXISTS trabalho_escravo (
     importado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (identificador_fonte, documento_normalizado, inclusao_cadastro)
 );
+
+CREATE TABLE IF NOT EXISTS mte_publicacao (
+    id INTEGER PRIMARY KEY,
+    sha256 TEXT NOT NULL,
+    arquivo_fonte TEXT NOT NULL,
+    fonte_url TEXT NOT NULL,
+    importado_em TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    total_registros INTEGER NOT NULL,
+    validade_ate TEXT NOT NULL
+);
 """
+
+INDEXES = (
+    "CREATE INDEX IF NOT EXISTS ix_importacao_ativa ON importacao(tipo, escopo, ativo)",
+    "CREATE INDEX IF NOT EXISTS ix_mutuario_documento ON sicor_mutuario(documento_normalizado)",
+    "CREATE INDEX IF NOT EXISTS ix_mutuario_ref ON sicor_mutuario(ref_bacen)",
+    "CREATE INDEX IF NOT EXISTS ix_propriedade_documento ON sicor_propriedade(documento_normalizado)",
+    "CREATE INDEX IF NOT EXISTS ix_propriedade_car ON sicor_propriedade(car_normalizado)",
+    "CREATE INDEX IF NOT EXISTS ix_propriedade_ref ON sicor_propriedade(ref_bacen)",
+    "CREATE INDEX IF NOT EXISTS ix_operacao_chave ON sicor_operacao(ref_bacen, nu_ordem)",
+    "CREATE INDEX IF NOT EXISTS ix_complemento_chave ON sicor_complemento_operacao(ref_bacen, nu_ordem)",
+    "CREATE INDEX IF NOT EXISTS ix_gleba_chave ON sicor_ponto_gleba(ref_bacen, nu_ordem, indice_gleba, indice_ponto)",
+    "CREATE INDEX IF NOT EXISTS ix_gleba_wkt_chave ON sicor_gleba_wkt(ref_bacen, nu_ordem, indice_gleba)",
+    "CREATE INDEX IF NOT EXISTS ix_mma_mcr_car ON mma_mcr(car_normalizado)",
+    "CREATE INDEX IF NOT EXISTS ix_trabalho_escravo_documento ON trabalho_escravo(documento_normalizado)",
+)
 
 ACTIVE_VIEW_TABLES = (
     "sicor_mutuario",
@@ -248,21 +268,13 @@ def _create_active_views(connection: sqlite3.Connection) -> None:
         )
 
 
-def _create_orm_tables(connection: sqlite3.Connection) -> None:
-    dialect = sqlite_dialect()
-    for table in Base.metadata.sorted_tables:
-        connection.execute(
-            str(CreateTable(table, if_not_exists=True).compile(dialect=dialect))
-        )
+def _create_tables(connection: sqlite3.Connection) -> None:
+    connection.executescript(SCHEMA)
 
 
-def _create_orm_indexes(connection: sqlite3.Connection) -> None:
-    dialect = sqlite_dialect()
-    for table in Base.metadata.sorted_tables:
-        for index in table.indexes:
-            connection.execute(
-                str(CreateIndex(index, if_not_exists=True).compile(dialect=dialect))
-            )
+def _create_indexes(connection: sqlite3.Connection) -> None:
+    for statement in INDEXES:
+        connection.execute(statement)
 
 
 def initialize(connection: sqlite3.Connection) -> None:
@@ -272,7 +284,7 @@ def initialize(connection: sqlite3.Connection) -> None:
             "Banco criado por uma versão mais nova; não é seguro migrá-lo."
         )
     _migrate_import_table(connection)
-    _create_orm_tables(connection)
+    _create_tables(connection)
     columns = {row[1] for row in connection.execute("PRAGMA table_info(importacao)")}
     if "escopo" not in columns:
         connection.execute(
@@ -284,7 +296,7 @@ def initialize(connection: sqlite3.Connection) -> None:
         )
         connection.execute("ALTER TABLE importacao ADD COLUMN validade_ate TEXT")
         connection.execute("UPDATE importacao SET ativo = 0, escopo = 'legado:' || id")
-    _create_orm_indexes(connection)
+    _create_indexes(connection)
     _create_active_views(connection)
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     connection.execute(

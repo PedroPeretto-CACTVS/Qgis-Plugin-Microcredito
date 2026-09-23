@@ -211,6 +211,8 @@ class RegressionTests(unittest.TestCase):
             "CPF_CNPJ",
             "CAR",
             "PROPRIETARIO_POSSUIDOR",
+            "FONTE_RECURSOS",
+            "LINHA_CREDITO",
             "REFERENCIA_INTERNA",
             "OBSERVACAO",
         ]
@@ -237,12 +239,20 @@ class RegressionTests(unittest.TestCase):
         return path
 
     def test_sheet_name_and_physical_row_preserved(self):
-        path = self.xlsx('<c r="A8" t="inlineStr"><is><t>01234567890</t></is></c>')
+        path = self.xlsx(
+            '<c r="A8" t="inlineStr"><is><t>01234567890</t></is></c>'
+            '<c r="D8" t="inlineStr"><is><t>AUTO</t></is></c>'
+            '<c r="E8" t="inlineStr"><is><t>Pronaf B</t></is></c>'
+        )
         row = read_batch_xlsx(path)[0]
         self.assertEqual((row.source_row, row.document), (8, "01234567890"))
 
     def test_scientific_document_rejected(self):
-        path = self.xlsx('<c r="A8"><v>1.2345678901E+10</v></c>')
+        path = self.xlsx(
+            '<c r="A8"><v>1.2345678901E+10</v></c>'
+            '<c r="D8" t="inlineStr"><is><t>AUTO</t></is></c>'
+            '<c r="E8" t="inlineStr"><is><t>Pronaf B</t></is></c>'
+        )
         with self.assertRaisesRegex(ValueError, "linha 8"):
             read_batch_xlsx(path)
 

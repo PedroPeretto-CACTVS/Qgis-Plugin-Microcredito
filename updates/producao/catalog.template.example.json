@@ -1,0 +1,26 @@
+{
+  "schema_version": 2,
+  "issued_at": "2026-09-23T12:00:00-03:00",
+  "expires_at": "2026-10-23T12:00:00-03:00",
+  "publication": {
+    "channel": "producao",
+    "prepared_by": "PREENCHER_RESPONSAVEL_PREPARACAO",
+    "change_reference": "PREENCHER_CHAMADO_DE_MUDANCA"
+  },
+  "packages": [
+    {
+      "id": "mte",
+      "label": "Impedimento social: Cadastro de Empregadores — MTE/MCR",
+      "version": "AAAA.MM.DD",
+      "strategy": "import_mte",
+      "provides": ["mte"],
+      "source_date": "AAAA-MM-DD",
+      "source_reference": "Referência oficial da publicação MTE",
+      "url": "https://api.github.com/repos/PedroPeretto-CACTVS/Qgis-Plugin-Microcredito/releases/assets/ID_DO_ASSET",
+      "archive_path": "updates/producao/mte-AAAA.MM.DD.zip",
+      "sha256": "PREENCHER_SHA256_HEXADECIMAL_DE_64_CARACTERES",
+      "size_bytes": 1,
+      "validity_until": "AAAA-MM-DD"
+    }
+  ]
+}
