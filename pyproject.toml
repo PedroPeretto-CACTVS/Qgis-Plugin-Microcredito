@@ -10,7 +10,6 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.16.0",
-    "pydantic>=2.13.5",
     "reportlab>=4.4.0",
     "sqlalchemy>=2.0.53",
     "typer>=0.19.0",

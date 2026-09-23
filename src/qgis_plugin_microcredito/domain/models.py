@@ -1,15 +1,19 @@
-"""Pydantic models used at import, query, and report boundaries."""
+"""Dataclasses used at import, query, and report boundaries.
+
+The QGIS plugin deliberately relies only on the Python standard library here.
+Some QGIS distributions ship incompatible ``pydantic``/``pydantic_core``
+builds, so importing Pydantic from a plugin would make startup depend on the
+host installation rather than on this project's code.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
 
-
-class ImportRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+@dataclass(kw_only=True)
+class ImportRecord:
     tipo: str
     arquivo: str
     total: int
@@ -18,9 +22,8 @@ class ImportRecord(BaseModel):
     ignorado: bool = False
 
 
-class CarCandidate(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
+@dataclass(kw_only=True)
+class CarCandidate:
     car_original: str | None = None
     car_normalizado: str | None = None
     situacao_car: str | None = None
@@ -35,9 +38,8 @@ class CarCandidate(BaseModel):
     importado_em: str | None = None
 
 
-class DocumentLink(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
+@dataclass(kw_only=True)
+class DocumentLink:
     car_original: str | None = None
     ref_bacen: str | None = None
     nu_ordem: str | None = None
@@ -50,9 +52,8 @@ class DocumentLink(BaseModel):
     importado_em: str | None = None
 
 
-class MmaRecord(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
+@dataclass(kw_only=True)
+class MmaRecord:
     car_original: str | None = None
     status_imovel: str | None = None
     condicao: str | None = None
@@ -74,9 +75,8 @@ class MmaRecord(BaseModel):
     importado_em: str | None = None
 
 
-class LaborRecord(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
+@dataclass(kw_only=True)
+class LaborRecord:
     documento_original: str | None = None
     documento_normalizado: str | None = None
     empregador: str | None = None
@@ -92,9 +92,8 @@ class LaborRecord(BaseModel):
     importado_em: str | None = None
 
 
-class SourceEvidence(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
+@dataclass(kw_only=True)
+class SourceEvidence:
     linhas_validas: int | None = None
     total_registros: int | None = None
     sha256: str | None = None
@@ -104,14 +103,14 @@ class SourceEvidence(BaseModel):
     fonte_url: str | None = None
 
 
-class VerdictBundle(BaseModel):
+@dataclass(kw_only=True)
+class VerdictBundle:
     mma_mcr: str
     mte: str
 
 
-class EnvironmentalLayerResult(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
+@dataclass(kw_only=True)
+class EnvironmentalLayerResult:
     codigo: str
     fonte: str
     resultado: str
@@ -120,18 +119,16 @@ class EnvironmentalLayerResult(BaseModel):
     motivo: str | None = None
 
 
-class MutuarioRow(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
-
+@dataclass(kw_only=True)
+class MutuarioRow:
     ref_bacen: str
     documento: str = ""
     tipo_beneficiario: str = ""
     dap_caf: str = ""
 
 
-class PropriedadeRow(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+@dataclass(kw_only=True)
+class PropriedadeRow:
     ref_bacen: str
     nu_ordem: str = ""
     documento: str = ""
@@ -140,9 +137,8 @@ class PropriedadeRow(BaseModel):
     nirf_cib: str = ""
 
 
-class OperacaoRow(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+@dataclass(kw_only=True)
+class OperacaoRow:
     ref_bacen: str
     nu_ordem: str
     data_emissao: str = ""
@@ -158,9 +154,8 @@ class OperacaoRow(BaseModel):
     bonus_car: str = ""
 
 
-class ComplementoRow(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+@dataclass(kw_only=True)
+class ComplementoRow:
     ref_bacen: str
     nu_ordem: str
     ref_bacen_efetivo: str = ""
@@ -169,9 +164,8 @@ class ComplementoRow(BaseModel):
     numero_cedula_if: str = ""
 
 
-class GlebaPointRow(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+@dataclass(kw_only=True)
+class GlebaPointRow:
     ref_bacen: str
     nu_ordem: str
     identificador: str = ""
@@ -183,18 +177,16 @@ class GlebaPointRow(BaseModel):
     id_ponto: str = ""
 
 
-class GlebaWktRow(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+@dataclass(kw_only=True)
+class GlebaWktRow:
     ref_bacen: str
     nu_ordem: str
     indice_gleba: int | None = None
     geometria_wkt: str
 
 
-class MmaImportRow(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+@dataclass(kw_only=True)
+class MmaImportRow:
     car: str
     status_imovel: str = ""
     condicao: str = ""
@@ -214,22 +206,24 @@ class MmaImportRow(BaseModel):
     bioma: str = ""
 
 
-class BatchRow(BaseModel):
+@dataclass(kw_only=True)
+class BatchRow:
     source_row: int
     document: str
     car: str = ""
     owner_document: str = ""
+    resource_source: str = ""
+    credit_line: str = ""
     internal_reference: str = ""
     observation: str = ""
 
 
-class ReportPayload(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
+@dataclass(kw_only=True)
+class ReportPayload:
     resultado_geral: str
     car: str = ""
-    versao_motor: str = Field(default="0.8.0")
-    documentos_consultados_mte: list[str] = Field(default_factory=list)
+    versao_motor: str = "0.8.0"
+    documentos_consultados_mte: list[str] = field(default_factory=list)
 
 
 def mapping_to_dict(row: Any) -> dict[str, Any]:
