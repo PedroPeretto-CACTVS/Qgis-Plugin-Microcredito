@@ -20,4 +20,4 @@ This plan maps the legacy monolith onto the modern template in `AGENTS.md`.
 
 ## Acceptance gates
 
-`uv sync` then `make format lint typecheck test`. QGIS-marked tests skip without PyQGIS.
+`uv sync` then `make format lint typecheck test` (Makefile targets are `.PHONY`; required so `make test` is not shadowed by the `test/` directory). QGIS-marked tests skip without PyQGIS.

@@ -1,3 +1,5 @@
+.PHONY: format lint typecheck test build install
+
 format:
 	uv run ruff format .
 

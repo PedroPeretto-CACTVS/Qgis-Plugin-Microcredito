@@ -29,6 +29,10 @@ Package and script names come from `pyproject.toml` — treat that file as the s
 - **Package manager:** [uv](https://docs.astral.sh/uv/) — sync deps with `uv sync` before running tools
 - **Virtual env:** `.venv/` (gitignored); prefix commands with `uv run` or use `Makefile` targets
 
+### Makefile
+
+All targets in `Makefile` are declared `.PHONY` (`format`, `lint`, `typecheck`, `test`, `build`, `install`) so GNU Make always runs their recipes. This is required for `test`: a `test/` directory exists at the repo root; without `.PHONY`, `make test` prints `'test' is up to date.` and skips pytest while `uv run pytest` still works. Prefer `make <target>` over duplicating `uv run` commands; when adding a new recipe, add its name to the `.PHONY` line.
+
 Do not commit secrets. `.env` is gitignored; load configuration from environment variables or explicit config modules, never hard-code credentials.
 
 ## Version control and pull requests
@@ -115,7 +119,7 @@ Tooling enforces style; run it instead of debating formatting:
 |------|---------|
 | Format | `make format` → `uv run ruff format .` |
 | Lint | `make lint` → `uv run ruff check . --fix` |
-| Types | `make typecheck` → `uv run mypy src` |
+| Types | `make typecheck` → `uv run mypy` (paths in `Makefile`) |
 | Tests | `make test` → `uv run pytest` |
 
 ### Types (strict mypy)

@@ -89,6 +89,8 @@ make format lint typecheck test
 | `make typecheck` | Tipagem estática com mypy |
 | `make test` | Testes com pytest (marcador `qgis` quando PyQGIS está instalado) |
 
+Os alvos do `Makefile` são declarados como `.PHONY` para que o Make sempre execute os comandos. Sem isso, `make test` pode confundir o alvo `test` com a pasta `test/` e exibir `make: 'test' is up to date.` sem rodar o pytest — nesse caso, `uv run pytest` ainda funciona, mas o alvo `make test` deve ser usado após `uv sync`.
+
 ## Estrutura do projeto
 
 ```

@@ -224,11 +224,10 @@ Port `tests/test_*.py` to pytest incrementally:
 
 ```bash
 uv sync
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src/car_microcredito src/car_microcredito_installer
-uv run pytest
+make format lint typecheck test
 ```
+
+Targets are defined in `Makefile` and declared `.PHONY` so `make test` is not shadowed by the `test/` directory. Equivalent `uv run` commands are listed in `AGENTS.md`.
 
 QGIS plugin tests may run in a separate optional job with QGIS installed.
 
