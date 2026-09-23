@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "puppeteer": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-puppeteer"
+      ]
+    },
+    "context7": {
+      "httpUrl": "https://mcp.context7.com/mcp",
+      "headers": {
+        "Authorization": "ctx7sk-dd079cfd-9201-454b-b871-54d12718734e",
+        "Accept": "application/json, text/event-stream"
+      }
+    }
+  }
+}

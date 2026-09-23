@@ -31,6 +31,50 @@ Package and script names come from `pyproject.toml` — treat that file as the s
 
 Do not commit secrets. `.env` is gitignored; load configuration from environment variables or explicit config modules, never hard-code credentials.
 
+## Version control and pull requests
+
+Follow this workflow whenever the user asks for branches, commits, or pull requests:
+
+### Git-flow (main-based)
+
+1. **`main`** is the integration branch — keep it deployable.
+2. Branch **from `main`** for every change (`git checkout main && git pull && git checkout -b <branch>`).
+3. Open a pull request **back into `main`**; do not commit directly to `main`.
+
+### Semantic branches
+
+Name branches with a **type prefix** and a short, kebab-case slug:
+
+| Prefix | Use for |
+|--------|---------|
+| `feat/` | New behavior or user-facing capability |
+| `fix/` | Bug fixes |
+| `refactor/` | Behavior-preserving structural changes |
+| `test/` | Test-only changes |
+| `chore/` | Tooling, deps, CI, formatting sweeps |
+
+Examples: `feat/export-demographic-layer`, `fix/session-leak-on-unload`.
+
+### Semantic commits
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) — same type prefixes as branches (`feat`, `fix`, `refactor`, `test`, `chore`, `docs`). Subject line in imperative mood, lowercase after the colon, no period at the end.
+
+```
+feat(plugin): add demographic export action
+fix(database): close session after repository errors
+```
+
+One logical change per commit when possible; avoid mixing unrelated types in a single commit.
+
+### Pull requests
+
+- **One feature or fix per PR** — scope matches a single `feat/` or `fix/` (or equivalent) branch.
+- **Granular** — prefer several small PRs over one large PR that mixes layers (plugin + database + unrelated refactors).
+- PR title and description should state the user-visible or behavioral outcome; link related issues when applicable.
+- Do not bundle drive-by refactors, dependency upgrades, or unrelated files with feature work — split or defer them.
+
+Commits and pushes remain **out of scope** unless the user explicitly requests them (see below); when they do, apply this section.
+
 ## Architecture
 
 Separate concerns so core logic stays testable outside QGIS:
@@ -130,4 +174,3 @@ Before marking work complete, all of the following must pass:
 
 - Drive-by refactors, dependency upgrades, or config churn unrelated to the task
 - New documentation files beyond what the task requires
-- Git commits or pushes — only when the user explicitly requests them
