@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,6 +25,7 @@ from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import (
     QAction,
     QApplication,
+    QComboBox,
     QDialog,
     QFileDialog,
     QFormLayout,
@@ -35,6 +37,7 @@ from qgis.PyQt.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QProgressBar,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -50,6 +53,18 @@ from qgis_plugin_microcredito.domain.policy import (
     evaluate_lists,
     list_message,
     unique_operation,
+)
+from qgis_plugin_microcredito.application.pre_analysis import (
+    PRE_ANALYSIS_LABELS,
+    TECHNICAL_DECISIONS,
+    build_pre_analysis,
+)
+from qgis_plugin_microcredito.domain.financing import (
+    AUTOMATIC_RESOURCE_SOURCE,
+    CREDIT_LINES,
+    RESOURCE_SOURCES,
+    resolve_resource_source,
+    suggest_resource_source,
 )
 
 from .analysis import default_sources
@@ -71,6 +86,16 @@ from .report import write_report
 from .worker import run_environment
 
 SUPREME_MODE = (Path(__file__).parent / "supreme_mode.txt").is_file()
+
+RESOURCE_SOURCE_OPTIONS = (
+    ("Automática pela UF do CAR — sugestão", AUTOMATIC_RESOURCE_SOURCE),
+    *((label, code) for code, label in RESOURCE_SOURCES),
+)
+
+CREDIT_LINE_OPTIONS = (
+    ("Selecione a linha de crédito…", ""),
+    *((line, line) for line in CREDIT_LINES),
+)
 
 
 def normalized_document_value(value: object) -> str:
@@ -157,7 +182,6 @@ class CarMicrocreditoPlugin:
         self.batch_window.raise_()
         self.batch_window.activateWindow()
 
-
 class SearchWindow(QDialog):
     COLUMNS = (
         ("situacao_car", "Situação CAR"),
@@ -174,12 +198,15 @@ class SearchWindow(QDialog):
         self.iface = iface
         self.supreme_mode = supreme_mode
         self.batch_window = None
+        self.car_document_window = None
         self.results = []
         self._busy_depth = 0
         self._owner_needed = False
         self.last_analysis = None
+        self._technical_decision = None
+        self._technical_decision_car = ""
         self.settings = QSettings("Cactvs", "CARMicrocredito")
-        self.setWindowTitle("CAR Microcrédito | Triagem socioambiental")
+        self.setWindowTitle("CAR Microcrédito | Apoio à decisão socioambiental")
         self.setWindowIcon(QIcon(str(Path(__file__).parent / "icon.svg")))
         self.setWindowFlags(self.windowFlags() | Qt.Window)
         self.setMinimumSize(600, 560)
@@ -199,11 +226,17 @@ class SearchWindow(QDialog):
             QPushButton:hover { background: #edf5f1; border-color: #2b7a59; }
             QPushButton#primary { background: #19734f; color: white; border-color: #165c41; }
             QPushButton#primary:hover { background: #135d40; }
+            QPushButton#baseLocalToggle { min-height: 28px; padding: 0 10px; text-align: left;
+                                          background: #e7f0ec; color: #25483b;
+                                          border-color: #b8cbc3; font-weight: 700; }
+            QPushButton#baseLocalToggle:hover { background: #dceae4; border-color: #2b7a59; }
             QTableWidget { background: white; border: 1px solid #ccd8d3; border-radius: 6px;
                            gridline-color: #e0e7e4; alternate-background-color: #f4f8f6; }
             QHeaderView::section { background: #e7f0ec; color: #25483b; padding: 7px;
                                    border: 0; border-right: 1px solid #ccd8d3; font-weight: 600; }
             QLabel#status { background: #edf5f1; color: #25483b; border-radius: 5px; padding: 8px; }
+            QLabel#preAnalysisSummary { background: #edf5f1; color: #25483b; border-radius: 5px;
+                                        border: 1px solid #79ae91; padding: 10px; }
             QLabel#status[statusLevel="ok"] { background: #e7f4ec; color: #145a3d; border: 1px solid #79ae91; }
             QLabel#status[statusLevel="review"] { background: #fff3d6; color: #7a4b00; border: 1px solid #d9ad58; }
             QLabel#status[statusLevel="neutral"] { background: #edf5f1; color: #25483b; border: 0; }
@@ -253,13 +286,37 @@ class SearchWindow(QDialog):
         search_mma = QPushButton("Buscar CAR e MMA/MCR")
         search_mma.clicked.connect(self.search_mma)
         self.car.returnPressed.connect(self.search_mma)
+        self.car.textChanged.connect(self._update_resource_source_suggestion)
         car_row = QHBoxLayout()
         car_row.addWidget(self.car, 1)
         car_row.addWidget(search_mma)
 
+        search_car_document = QPushButton("Procurar CPF/CNPJ no Sicor")
+        search_car_document.setObjectName("carDocumentLookupButton")
+        search_car_document.setToolTip(
+            "Consultar documentos vinculados ao CAR no banco local; o vínculo não "
+            "comprova titularidade"
+        )
+        search_car_document.clicked.connect(self.open_car_document_lookup)
+        car_document_row = QHBoxLayout()
+        car_document_row.addStretch(1)
+        car_document_row.addWidget(search_car_document)
+
         self.owner_document = QLineEdit()
         self.owner_document.setPlaceholderText("CPF ou CNPJ do proprietário/possuidor")
         self.owner_document.textChanged.connect(self._owner_document_changed)
+
+        self.fund = QComboBox()
+        self.fund.setObjectName("constitutionalFund")
+        for label, code in RESOURCE_SOURCE_OPTIONS:
+            self.fund.addItem(label, code)
+        self.fund.setToolTip(
+            "A sugestão usa apenas a UF do CAR; confirme a fonte contratual."
+        )
+        self.program = QComboBox()
+        self.program.setObjectName("financingProgram")
+        for label, code in CREDIT_LINE_OPTIONS:
+            self.program.addItem(label, code)
 
         self.latitude = QLineEdit()
         self.latitude.setPlaceholderText("Latitude, ex.: -11.83610")
@@ -324,12 +381,13 @@ class SearchWindow(QDialog):
         analyze.setToolTip("Executar a análise e salvar o PDF e o JSON definitivos")
         analyze.setObjectName("primary")
         analyze.clicked.connect(lambda: self.analyze_selected("final"))
-        preview_interferences = QPushButton("Ver interferências")
+        preview_interferences = QPushButton("Pré-análise das regras")
+        preview_interferences.setObjectName("preAnalysisButton")
         preview_interferences.setToolTip(
-            "Conferir os resultados e as áreas sobrepostas antes de gerar o relatório"
+            "Interpretar as fontes, conferir possíveis impedimentos e registrar a decisão técnica"
         )
         preview_interferences.clicked.connect(
-            lambda: self.analyze_selected("interferences")
+            lambda: self.analyze_selected("pre_analysis")
         )
         preview_report = QPushButton("Prévia do relatório")
         preview_report.setToolTip("Gerar e abrir um PDF provisório")
@@ -361,6 +419,9 @@ class SearchWindow(QDialog):
             choose_car_base,
             search,
             search_mma,
+            search_car_document,
+            self.fund,
+            self.program,
             search_point,
             extract_maps,
             clear,
@@ -373,7 +434,7 @@ class SearchWindow(QDialog):
         title = QLabel("CAR Microcrédito")
         title.setObjectName("title")
         subtitle = QLabel(
-            "Consulta Sicor, validação MMA/MCR e triagem territorial da operação rural"
+            "Consulta bases, interpreta regras e organiza evidências para a decisão do técnico"
         )
         subtitle.setObjectName("subtitle")
         title_row = QHBoxLayout()
@@ -387,12 +448,24 @@ class SearchWindow(QDialog):
             title_row.addWidget(open_batch)
             self.interactive_controls.append(open_batch)
 
-        database_group = QGroupBox("1. Base local")
-        database_layout = QFormLayout(database_group)
+        self.database_toggle = QPushButton()
+        self.database_toggle.setObjectName("baseLocalToggle")
+        self.database_toggle.setCheckable(True)
+        self.database_panel = QGroupBox()
+        self.database_panel.setObjectName("baseLocalPanel")
+        database_layout = QFormLayout(self.database_panel)
         database_layout.setRowWrapPolicy(QFormLayout.WrapLongRows)
         database_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         database_layout.addRow("Banco SQLite", db_row)
         database_layout.addRow("Polígonos do CAR", car_base_row)
+        expanded = self.settings.value("base_local_expanded", False, type=bool)
+        paths_valid = Path(saved_db).is_file() and Path(saved_car_base).is_dir()
+        self.database_toggle.setChecked(expanded or not paths_valid)
+        self._set_base_local_expanded(
+            self.database_toggle.isChecked(), persist=False
+        )
+        self.database_toggle.toggled.connect(self._set_base_local_expanded)
+        self.interactive_controls.append(self.database_toggle)
 
         query_group = QGroupBox("2. Identificar operação")
         query_layout = QFormLayout(query_group)
@@ -400,7 +473,10 @@ class SearchWindow(QDialog):
         query_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         query_layout.addRow("CPF ou CNPJ", search_row)
         query_layout.addRow("Número do CAR", car_row)
+        query_layout.addRow("CPF/CNPJ vinculado", car_document_row)
         query_layout.addRow("Proprietário/possuidor", self.owner_document)
+        query_layout.addRow("Fonte de recursos", self.fund)
+        query_layout.addRow("Linha de crédito", self.program)
         query_layout.addRow("Coordenada WGS84", point_row)
         query_layout.addRow("Link do Google Maps", maps_row)
         query_layout.addRow("Retorno MMA/MCR", self.mma_result)
@@ -419,7 +495,8 @@ class SearchWindow(QDialog):
         top_layout = QVBoxLayout(top_content)
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(8)
-        top_layout.addWidget(database_group)
+        top_layout.addWidget(self.database_toggle)
+        top_layout.addWidget(self.database_panel)
         top_layout.addWidget(query_group)
         top_scroll = QScrollArea()
         top_scroll.setWidgetResizable(True)
@@ -466,6 +543,7 @@ class SearchWindow(QDialog):
             self.content_splitter.restoreState(saved_splitter)
         else:
             self.content_splitter.setSizes([390, 135])
+        self._update_resource_source_suggestion()
 
     def open_batch_window(self):
         if self.batch_window is None:
@@ -475,6 +553,51 @@ class SearchWindow(QDialog):
         self.batch_window.show()
         self.batch_window.raise_()
         self.batch_window.activateWindow()
+
+    def _set_base_local_expanded(
+        self, expanded: bool, persist: bool = True
+    ) -> None:
+        self.database_panel.setVisible(expanded)
+        arrow = "▼" if expanded else "▶"
+        action = "ocultar" if expanded else "mostrar"
+        self.database_toggle.setText(f"{arrow} 1. Configuração da base local")
+        self.database_toggle.setAccessibleName(
+            f"Configuração da base local; {action} opções"
+        )
+        if persist:
+            self.settings.setValue("base_local_expanded", expanded)
+
+    def _update_resource_source_suggestion(self) -> None:
+        index = self.fund.findData(AUTOMATIC_RESOURCE_SOURCE)
+        if index < 0:
+            return
+        suggested = suggest_resource_source(self.car.text())
+        label = (
+            f"Automática pela UF do CAR — {suggested} sugerido"
+            if suggested
+            else "Automática pela UF do CAR — aguardando CAR"
+        )
+        self.fund.setItemText(index, label)
+
+    def open_car_document_lookup(self) -> None:
+        if not normalize_car(self.car.text()):
+            QMessageBox.information(
+                self,
+                "CAR obrigatório",
+                "Informe o número completo do CAR antes de procurar o CPF/CNPJ.",
+            )
+            self.car.setFocus()
+            return
+        if self.car_document_window is None:
+            from .car_document_window import CarDocumentWindow
+
+            self.car_document_window = CarDocumentWindow(self.iface, _load_core)
+        self.car_document_window.database.setText(self.db_path.text())
+        self.car_document_window.car.setText(self.car.text())
+        self.car_document_window.show()
+        self.car_document_window.raise_()
+        self.car_document_window.activateWindow()
+        self.car_document_window.search()
 
     def closeEvent(self, event):
         if self._busy_depth:
@@ -765,7 +888,12 @@ class SearchWindow(QDialog):
             self.maps_url,
         ):
             field.clear()
+        self.fund.setCurrentIndex(self.fund.findData(AUTOMATIC_RESOURCE_SOURCE))
+        self.program.setCurrentIndex(0)
         self._set_owner_required(False)
+        self.last_analysis = None
+        self._technical_decision = None
+        self._technical_decision_car = ""
         self.results = []
         self._fill_table()
         self._set_mma_status("Nenhum CAR consultado na lista do MMA.", "neutral")
@@ -1180,6 +1308,148 @@ class SearchWindow(QDialog):
             "inconclusivo": "Inconclusivo",
         }.get(str(value), str(value or "Não informado"))
 
+    def _pre_analysis_dialog(self, analysis: dict[str, object]) -> QDialog:
+        pre_analysis = analysis.get("pre_analise") or build_pre_analysis(analysis)
+        analysis["pre_analise"] = pre_analysis
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Pré-análise normativa para decisão técnica")
+        dialog.setMinimumSize(820, 520)
+        dialog.resize(1160, 700)
+
+        layout = QVBoxLayout(dialog)
+        title = QLabel("Pré-análise das regras para apoio à decisão")
+        title.setObjectName("title")
+        layout.addWidget(title)
+        summary = QLabel(
+            f"<b>{pre_analysis.get('classificacao_geral_rotulo')}</b><br>"
+            f"{pre_analysis.get('resumo')}"
+        )
+        summary.setObjectName("preAnalysisSummary")
+        summary.setWordWrap(True)
+        summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(summary)
+
+        explanation = QLabel(
+            "A ferramenta interpreta cada fonte e aponta possíveis impedimentos, "
+            "lacunas ou ausência de indício. Ela não decide a contratação."
+        )
+        explanation.setObjectName("notice")
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
+
+        columns = (
+            "Regra/fonte",
+            "Conclusão preliminar",
+            "Entendimento e fundamento",
+            "Providência do técnico",
+        )
+        rules = list(pre_analysis.get("regras") or [])
+        table = QTableWidget(len(rules), len(columns))
+        table.setObjectName("preAnalysisTable")
+        table.setHorizontalHeaderLabels(columns)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.verticalHeader().setVisible(False)
+        backgrounds = {
+            "possivel_impedimento": QColor("#FDECEC"),
+            "sem_indicio_impedimento": QColor("#EAF5EF"),
+            "inconclusivo": QColor("#FFF5D6"),
+            "validacao_tecnica": QColor("#EAF1FB"),
+        }
+        for row, item in enumerate(rules):
+            result_code = str(item.get("classificacao") or "inconclusivo")
+            foundation = (
+                f"{item.get('entendimento_regra', '')} Resultado desta consulta: "
+                f"{item.get('fundamento_resultado', '')}"
+            )
+            values = (
+                item.get("regra"),
+                item.get("classificacao_rotulo"),
+                foundation,
+                item.get("providencia_tecnica"),
+            )
+            background = backgrounds.get(result_code, QColor("#FFFFFF"))
+            for column, value in enumerate(values):
+                cell = QTableWidgetItem(str(value or ""))
+                cell.setBackground(background)
+                reference = str(item.get("referencia") or "")
+                cell.setToolTip(
+                    str(value or "")
+                    + (f"\n\nReferência: {reference}" if reference else "")
+                )
+                table.setItem(row, column, cell)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        table.resizeRowsToContents()
+        layout.addWidget(table, 1)
+
+        decision_group = QGroupBox("Decisão do técnico responsável pela contratação")
+        decision_form = QFormLayout(decision_group)
+        decision = QComboBox()
+        decision.setObjectName("technicalDecisionCombo")
+        for code, label in TECHNICAL_DECISIONS:
+            decision.addItem(label, code)
+        justification = QPlainTextEdit()
+        justification.setObjectName("technicalDecisionJustification")
+        justification.setPlaceholderText(
+            "Registre documentos, exceções, condicionantes e fundamento da decisão."
+        )
+        justification.setMaximumHeight(85)
+        existing = analysis.get("decisao_tecnica") or {}
+        existing_index = decision.findData(str(existing.get("codigo") or "pendente"))
+        decision.setCurrentIndex(existing_index if existing_index >= 0 else 0)
+        justification.setPlainText(str(existing.get("justificativa") or ""))
+        decision_form.addRow("Conclusão", decision)
+        decision_form.addRow("Justificativa", justification)
+        layout.addWidget(decision_group)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        close = QPushButton("Fechar sem alterar")
+        close.clicked.connect(dialog.reject)
+        actions.addWidget(close)
+        register = QPushButton("Registrar decisão técnica")
+        register.setObjectName("primary")
+
+        def register_decision() -> None:
+            code = str(decision.currentData() or "pendente")
+            text = justification.toPlainText().strip()
+            if code != "pendente" and len(text) < 15:
+                QMessageBox.information(
+                    dialog,
+                    "Justificativa necessária",
+                    "Descreva o fundamento da decisão técnica com pelo menos 15 caracteres.",
+                )
+                return
+            recorded = {
+                "codigo": code,
+                "rotulo": decision.currentText(),
+                "justificativa": text,
+                "registrada_em": datetime.now().astimezone().isoformat(
+                    timespec="seconds"
+                ),
+                "pre_analise_sha256": pre_analysis.get("sha256"),
+                "responsabilidade": (
+                    "Decisão humana do técnico; não produzida automaticamente pela ferramenta."
+                ),
+            }
+            self._technical_decision = recorded
+            self._technical_decision_car = normalize_car(analysis.get("car"))
+            analysis["decisao_tecnica"] = recorded
+            self.last_analysis = analysis
+            dialog.accept()
+
+        register.clicked.connect(register_decision)
+        actions.addWidget(register)
+        layout.addLayout(actions)
+        return dialog
+
+    def _show_pre_analysis(self, analysis: dict[str, object]) -> None:
+        self._pre_analysis_dialog(analysis).exec()
+
     def _interference_preview_dialog(self, analysis: dict[str, object]) -> QDialog:
         dialog = QDialog(self)
         dialog.setWindowTitle("Prévia dos resultados de interferência")
@@ -1276,6 +1546,18 @@ class SearchWindow(QDialog):
             QMessageBox.information(
                 self, "Informar CAR", "Informe o número do CAR para compor a análise."
             )
+            return
+        resource_source, resource_source_mode, resource_source_state = (
+            resolve_resource_source(self.fund.currentData(), self.car.text())
+        )
+        if not resource_source:
+            QMessageBox.information(
+                self,
+                "Fonte de recursos",
+                "Não foi possível sugerir a fonte pela UF do CAR. Escolha FCO, "
+                "FNO ou OGU manualmente.",
+            )
+            self.fund.setFocus()
             return
         selected_report_dir = None
         if mode == "final":
@@ -1434,14 +1716,27 @@ class SearchWindow(QDialog):
                 "fonte_geometria": geometry_source,
                 "evidencia_geometria": file_evidence(target_path),
                 "documentos_consultados_mte": consulted_mte_documents,
+                "fundo_constitucional": resource_source,
+                "fonte_recursos_modo": resource_source_mode,
+                "fonte_recursos_uf": resource_source_state,
+                "programa_financiamento": str(self.program.currentData() or ""),
                 **database_evidence,
             }
+            analysis["pre_analise"] = build_pre_analysis(analysis)
+            if (
+                self._technical_decision
+                and self._technical_decision_car == normalize_car(analysis.get("car"))
+                and self._technical_decision.get("pre_analise_sha256")
+                == analysis["pre_analise"].get("sha256")
+            ):
+                analysis["decisao_tecnica"] = dict(self._technical_decision)
+            elif self._technical_decision_car == normalize_car(analysis.get("car")):
+                self._technical_decision = None
+                self._technical_decision_car = ""
             self.last_analysis = analysis
-            if mode == "interferences":
-                self._processing_step(
-                    "Abrindo a prévia dos resultados de interferência…"
-                )
-                self._show_interference_preview(analysis)
+            if mode in {"interferences", "pre_analysis"}:
+                self._processing_step("Abrindo a pré-análise normativa…")
+                self._show_pre_analysis(analysis)
                 return
             report_dir = selected_report_dir or (project_root / "output" / "pdf")
             report_dir.mkdir(parents=True, exist_ok=True)
@@ -1479,7 +1774,10 @@ class SearchWindow(QDialog):
             QMessageBox.information(
                 self,
                 "Relatório criado",
-                f"Resultado: {overall}\n\nPDF: {pdf_path}\nJSON: {json_path}",
+                f"Pré-análise: {analysis['pre_analise']['classificacao_geral_rotulo']}\n"
+                f"Decisão técnica: "
+                f"{(analysis.get('decisao_tecnica') or {}).get('rotulo', 'Pendente')}"
+                f"\n\nPDF: {pdf_path}\nJSON: {json_path}",
             )
         except Exception as exc:
             QMessageBox.critical(self, "Falha na análise", str(exc))
