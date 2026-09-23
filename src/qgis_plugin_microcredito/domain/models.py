@@ -222,7 +222,7 @@ class BatchRow:
 class ReportPayload:
     resultado_geral: str
     car: str = ""
-    versao_motor: str = "0.9.4"
+    versao_motor: str = "0.9.5"
     documentos_consultados_mte: list[str] = field(default_factory=list)
 
 

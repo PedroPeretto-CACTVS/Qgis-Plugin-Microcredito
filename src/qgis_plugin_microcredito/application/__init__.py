@@ -5,6 +5,10 @@ from qgis_plugin_microcredito.application.import_service import (
     ImportResult,
     import_file,
 )
+from qgis_plugin_microcredito.application.owner_documents import (
+    require_owner_documents,
+    validate_report_owner_documents,
+)
 from qgis_plugin_microcredito.application.pre_analysis import build_pre_analysis
 from qgis_plugin_microcredito.application.query_service import (
     find_by_car,
@@ -26,4 +30,6 @@ __all__ = [
     "find_operation_context",
     "find_slave_labor_by_documents",
     "import_file",
+    "require_owner_documents",
+    "validate_report_owner_documents",
 ]
