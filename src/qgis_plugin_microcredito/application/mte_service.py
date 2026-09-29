@@ -33,7 +33,11 @@ HEADERS = (
 
 
 def import_mte(
-    connection: sqlite3.Connection, path: str | Path, *, validade_ate: str
+    connection: sqlite3.Connection,
+    path: str | Path,
+    *,
+    validade_ate: str,
+    source_reference: str | None = None,
 ) -> int:
     date.fromisoformat(validade_ate)
     source = Path(path)
@@ -79,7 +83,7 @@ def import_mte(
                 document,
                 *values[5:],
                 SOURCE_URL,
-                str(source.resolve()),
+                source_reference or str(source.resolve()),
             )
         )
     if not records:
@@ -102,6 +106,12 @@ def import_mte(
             """INSERT INTO mte_publicacao
             (sha256, arquivo_fonte, fonte_url, total_registros, validade_ate)
             VALUES (?, ?, ?, ?, ?)""",
-            (digest, str(source.resolve()), SOURCE_URL, len(records), validade_ate),
+            (
+                digest,
+                source_reference or str(source.resolve()),
+                SOURCE_URL,
+                len(records),
+                validade_ate,
+            ),
         )
     return len(records)

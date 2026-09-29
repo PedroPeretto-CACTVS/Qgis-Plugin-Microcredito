@@ -20,7 +20,12 @@ def validate_zip(path: str | Path) -> bool:
     return True
 
 
-def validate_geopackage(path: str | Path, uf: str | None = None) -> bool:
+def validate_geopackage(
+    path: str | Path,
+    uf: str | None = None,
+    *,
+    expected_foreign_features: int = 0,
+) -> bool:
     connection = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
     try:
         if list(connection.execute("PRAGMA quick_check")) != [("ok",)]:
@@ -63,13 +68,19 @@ def validate_geopackage(path: str | Path, uf: str | None = None) -> bool:
             if field is None:
                 raise ValueError("Identificador CAR ausente na base estadual.")
             quoted = '"' + field.replace('"', '""') + '"'
-            mismatch = connection.execute(
-                f"SELECT 1 FROM {table} WHERE {quoted} IS NULL OR upper(substr({quoted},1,2)) <> ? LIMIT 1",
-                (uf,),
-            ).fetchone()
-            if mismatch:
+            mismatch_count = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM {table} "
+                    f"WHERE {quoted} IS NULL OR upper(substr({quoted},1,2)) <> ?",
+                    (uf,),
+                ).fetchone()[0]
+            )
+            if mismatch_count != expected_foreign_features:
                 raise ValueError(
-                    "A base contém CAR sem identificação ou de UF diferente da esperada."
+                    "A quantidade de CAR sem identificação ou de UF diferente "
+                    "diverge da exceção assinada: "
+                    f"foram encontrados {mismatch_count}, mas o catálogo declarou "
+                    f"{expected_foreign_features}."
                 )
         return True
     finally:
