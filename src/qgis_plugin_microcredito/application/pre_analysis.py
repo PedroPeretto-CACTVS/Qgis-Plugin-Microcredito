@@ -13,6 +13,7 @@ import unicodedata
 from collections import Counter
 
 from qgis_plugin_microcredito.domain.fiscal_modules import LEGAL_REFERENCE
+from qgis_plugin_microcredito.domain.normalize import normalize_car, normalize_document
 
 POSSIBLE_IMPEDIMENT = "possivel_impedimento"
 NO_INDICATION = "sem_indicio_impedimento"
@@ -54,6 +55,59 @@ def _plain(value: object) -> str:
         for character in unicodedata.normalize("NFKD", text)
         if not unicodedata.combining(character)
     )
+
+
+def _digest(value: object) -> str:
+    return str(value or "").strip().lower()
+
+
+def _analysis_identity(analysis: dict[str, object]) -> dict[str, object]:
+    """Seleciona somente identidades estáveis dos insumos efetivamente consultados."""
+    document_values = analysis.get("documentos_consultados_mte")
+    if not isinstance(document_values, list):
+        document_values = []
+    documents = {
+        normalize_document(value) or _plain(value)
+        for value in document_values
+        if str(value or "").strip()
+    }
+    active_editions = [
+        {
+            "tipo": _plain(item.get("tipo")),
+            "escopo": _plain(item.get("escopo")),
+            "sha256": _digest(item.get("sha256")),
+        }
+        for item in _mapping_list(analysis.get("importacoes_sicor_mma"))
+    ]
+    environmental = _mapping(analysis.get("ambiental"))
+    environmental_editions = [
+        {
+            "codigo": _plain(item.get("codigo")),
+            "sha256_conjunto_fonte": _digest(item.get("sha256_conjunto_fonte")),
+        }
+        for item in _mapping_list(environmental.get("camadas"))
+    ]
+    return {
+        "car": normalize_car(analysis.get("car")),
+        "documentos_consultados_mte": sorted(documents),
+        "geometria_sha256": _digest(
+            _mapping(analysis.get("evidencia_geometria")).get("sha256")
+        ),
+        "fontes_publicadas": {
+            "mma_mcr_sha256": _digest(
+                _mapping(analysis.get("mma_fonte")).get("sha256")
+            ),
+            "mte_sha256": _digest(_mapping(analysis.get("mte_fonte")).get("sha256")),
+        },
+        "importacoes_ativas": sorted(
+            active_editions,
+            key=lambda item: (item["tipo"], item["escopo"], item["sha256"]),
+        ),
+        "camadas_ambientais": sorted(
+            environmental_editions,
+            key=lambda item: (item["codigo"], item["sha256_conjunto_fonte"]),
+        ),
+    }
 
 
 def _item(
@@ -405,6 +459,7 @@ def build_pre_analysis(analysis: dict[str, object]) -> dict[str, object]:
         "versao_regras": RULES_VERSION,
         "classificacao_geral": overall,
         "regras": rules,
+        "identidade_analise": _analysis_identity(analysis),
     }
     fingerprint = hashlib.sha256(
         json.dumps(
