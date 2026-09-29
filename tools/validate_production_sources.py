@@ -102,16 +102,27 @@ def validate(
 
     for uf in UFS:
         relative = f"car/{uf}/{uf}_AREA_IMOVEL.gpkg"
+        sicar_path = root / relative
         print(f"Validando SICAR/{uf}…", flush=True)
+        if not sicar_path.is_file():
+            checked.append(
+                {
+                    "base": f"sicar_imoveis_{uf.lower()}",
+                    "path": relative,
+                    "status": "ausente",
+                }
+            )
+            continue
+        diagnostic: dict[str, object] | None = None
         try:
-            diagnostic = _sicar_mismatch_summary(root / relative, uf)
+            diagnostic = _sicar_mismatch_summary(sicar_path, uf)
             foreign_count = int(diagnostic["invalidos"])
             if foreign_count > 1000:
                 raise ValueError(
                     "Exceções de UF acima do limite operacional de 1000 registros."
                 )
             validate_geopackage(
-                root / relative, uf=uf, expected_foreign_features=foreign_count
+                sicar_path, uf=uf, expected_foreign_features=foreign_count
             )
             status = "valida_com_excecao_de_origem" if foreign_count else "valida"
             checked.append(
@@ -124,15 +135,15 @@ def validate(
                 }
             )
         except Exception as exc:
-            checked.append(
-                {
-                    "base": f"sicar_imoveis_{uf.lower()}",
-                    "path": relative,
-                    "status": "bloqueada",
-                    "erro": str(exc),
-                    "diagnostico": _sicar_mismatch_summary(root / relative, uf),
-                }
-            )
+            failure: dict[str, object] = {
+                "base": f"sicar_imoveis_{uf.lower()}",
+                "path": relative,
+                "status": "bloqueada",
+                "erro": str(exc),
+            }
+            if diagnostic is not None:
+                failure["diagnostico"] = diagnostic
+            checked.append(failure)
 
     for identifier, relative in ENVIRONMENTAL.items():
         print(f"Validando {identifier}…", flush=True)
@@ -186,26 +197,35 @@ def validate(
             )
 
     mma_candidates = sorted((root / "mma").glob("*.zip"))
-    mma = mma_candidates[-1]
     print("Validando ZIP MMA/MCR…", flush=True)
-    try:
-        validate_zip(mma)
+    if not mma_candidates:
         checked.append(
             {
                 "base": "mma_mcr",
-                "path": mma.relative_to(root).as_posix(),
-                "status": "valida",
+                "path": "mma/PUBLICACAO_MMA_A_DEFINIR.zip",
+                "status": "ausente",
             }
         )
-    except Exception as exc:
-        checked.append(
-            {
-                "base": "mma_mcr",
-                "path": mma.relative_to(root).as_posix(),
-                "status": "bloqueada",
-                "erro": str(exc),
-            }
-        )
+    else:
+        mma = mma_candidates[-1]
+        try:
+            validate_zip(mma)
+            checked.append(
+                {
+                    "base": "mma_mcr",
+                    "path": mma.relative_to(root).as_posix(),
+                    "status": "valida",
+                }
+            )
+        except Exception as exc:
+            checked.append(
+                {
+                    "base": "mma_mcr",
+                    "path": mma.relative_to(root).as_posix(),
+                    "status": "bloqueada",
+                    "erro": str(exc),
+                }
+            )
 
     mte = (
         mte_source.resolve()
