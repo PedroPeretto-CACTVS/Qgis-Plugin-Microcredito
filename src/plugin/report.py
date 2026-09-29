@@ -856,6 +856,69 @@ def _pre_analysis_story(analysis: dict[str, object], styles):
     return story
 
 
+def _fiscal_module_story(analysis: dict[str, object], styles):
+    assessment = analysis.get("modulo_fiscal") or {}
+    if not isinstance(assessment, dict) or not assessment:
+        return []
+    s = styles
+    values = (
+        (
+            "Município IBGE",
+            assessment.get("municipality_code") or "Não identificado",
+        ),
+        ("Área considerada (ha)", assessment.get("area_ha") or "Não disponível"),
+        (
+            "Módulo fiscal municipal (ha)",
+            assessment.get("module_size_ha") or "Não disponível",
+        ),
+        (
+            "Quantidade calculada",
+            assessment.get("module_count") or "Não disponível",
+        ),
+        (
+            "Quantidade declarada na fonte",
+            assessment.get("declared_module_count") or "Não disponível",
+        ),
+        (
+            "Limite de 4 módulos (ha)",
+            assessment.get("four_modules_ha") or "Não disponível",
+        ),
+    )
+    rows = [[_p(label, s["Cell"]), _p(value, s["Cell"])] for label, value in values]
+    return [
+        Paragraph("Módulos fiscais e agricultura familiar", s["Section"]),
+        Paragraph(
+            f"<b>{_escape(assessment.get('status_label'))}</b>", s["BodySmall"]
+        ),
+        Spacer(1, 2 * mm),
+        _table(rows, [72 * mm, 108 * mm], header=False),
+        Spacer(1, 2 * mm),
+        Paragraph(_escape(assessment.get("rationale")), s["BodySmall"]),
+        Paragraph(
+            _escape(
+                f"Método: {assessment.get('calculation_source') or 'não disponível'}."
+            ),
+            s["Foot"],
+        ),
+        Paragraph(
+            _escape(
+                "A conclusão acima trata somente do limite territorial do CAR. "
+                + str(assessment.get("family_farming_qualification") or "")
+                + ". "
+                + str(assessment.get("scope") or "")
+            ),
+            s["Foot"],
+        ),
+        Paragraph(
+            _escape(
+                f"Fonte: {assessment.get('source_rule') or ''}. "
+                f"Dados do imóvel: {assessment.get('property_data_source') or ''}."
+            ),
+            s["Foot"],
+        ),
+    ]
+
+
 def _analysis_story(analysis: dict[str, object], styles, batch_document: str = ""):
     s = styles
     story = []
@@ -893,6 +956,7 @@ def _analysis_story(analysis: dict[str, object], styles, batch_document: str = "
         )
     )
     story.append(Spacer(1, 2 * mm))
+    story += _fiscal_module_story(analysis, s)
     source_mode = (
         f"Sugerida pela UF {analysis.get('fonte_recursos_uf') or 'não identificada'}; "
         "confirmar na proposta"

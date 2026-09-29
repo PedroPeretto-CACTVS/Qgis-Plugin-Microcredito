@@ -5,7 +5,18 @@ from __future__ import annotations
 import sqlite3
 from datetime import date
 
-SCHEMA_VERSION = 3
+from qgis_plugin_microcredito.domain.fiscal_modules import (
+    SOURCE_DATE as FISCAL_MODULE_SOURCE_DATE,
+)
+from qgis_plugin_microcredito.domain.fiscal_modules import (
+    SOURCE_RULE as FISCAL_MODULE_SOURCE_RULE,
+)
+from qgis_plugin_microcredito.domain.fiscal_modules import (
+    SOURCE_URL as FISCAL_MODULE_SOURCE_URL,
+)
+from qgis_plugin_microcredito.domain.fiscal_modules import fiscal_module_rows
+
+SCHEMA_VERSION = 4
 
 # Pre-v3 CREATE script used to reconstruct historical files in tests.
 SCHEMA = """
@@ -153,6 +164,14 @@ CREATE TABLE IF NOT EXISTS mte_publicacao (
     total_registros INTEGER NOT NULL,
     validade_ate TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS incra_modulo_fiscal (
+    codigo_municipio TEXT PRIMARY KEY CHECK (length(codigo_municipio) = 7),
+    modulo_fiscal_ha INTEGER NOT NULL CHECK (modulo_fiscal_ha > 0),
+    norma_fonte TEXT NOT NULL,
+    fonte_url TEXT NOT NULL,
+    data_referencia TEXT NOT NULL
+);
 """
 
 INDEXES = (
@@ -277,6 +296,30 @@ def _create_indexes(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
+def _seed_fiscal_modules(connection: sqlite3.Connection) -> None:
+    connection.executemany(
+        """INSERT INTO incra_modulo_fiscal
+           (codigo_municipio, modulo_fiscal_ha, norma_fonte, fonte_url,
+            data_referencia)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(codigo_municipio) DO UPDATE SET
+               modulo_fiscal_ha = excluded.modulo_fiscal_ha,
+               norma_fonte = excluded.norma_fonte,
+               fonte_url = excluded.fonte_url,
+               data_referencia = excluded.data_referencia""",
+        (
+            (
+                code,
+                hectares,
+                FISCAL_MODULE_SOURCE_RULE,
+                FISCAL_MODULE_SOURCE_URL,
+                FISCAL_MODULE_SOURCE_DATE,
+            )
+            for code, hectares in fiscal_module_rows()
+        ),
+    )
+
+
 def initialize(connection: sqlite3.Connection) -> None:
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version > SCHEMA_VERSION:
@@ -298,6 +341,7 @@ def initialize(connection: sqlite3.Connection) -> None:
         connection.execute("UPDATE importacao SET ativo = 0, escopo = 'legado:' || id")
     _create_indexes(connection)
     _create_active_views(connection)
+    _seed_fiscal_modules(connection)
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     connection.execute(
         """UPDATE sicor_propriedade SET car_normalizado = ''

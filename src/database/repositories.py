@@ -174,6 +174,23 @@ def find_mma_mcr_by_car(
     return [mapping_to_dict(row) for row in rows]
 
 
+def find_fiscal_module(
+    connection: sqlite3.Connection, municipality_code: str
+) -> dict[str, Any]:
+    """Return the official INCRA fiscal-module definition for a municipality."""
+    code = "".join(character for character in municipality_code if character.isdigit())
+    if len(code) != 7:
+        return {}
+    row = connection.execute(
+        """SELECT codigo_municipio, modulo_fiscal_ha, norma_fonte, fonte_url,
+                  data_referencia
+             FROM incra_modulo_fiscal
+            WHERE codigo_municipio = ?""",
+        (code,),
+    ).fetchone()
+    return mapping_to_dict(row) if row else {}
+
+
 def list_imports(connection: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = connection.execute(
         """SELECT id, tipo, escopo, ativo, validade_ate, arquivo, importado_em,
