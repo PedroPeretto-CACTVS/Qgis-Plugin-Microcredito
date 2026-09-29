@@ -14,6 +14,16 @@ def normalize_document(value: object) -> str:
     return digits if len(digits) in (11, 14) else ""
 
 
+def mask_document(value: object) -> str:
+    """Exibe só os dois dígitos finais de um CPF/CNPJ válido."""
+    digits = normalize_document(value)
+    if len(digits) == 11:
+        return f"***.***.***-{digits[-2:]}"
+    if len(digits) == 14:
+        return f"**.***.***/****-{digits[-2:]}"
+    return "Documento indisponível"
+
+
 def is_masked_document(value: object) -> bool:
     text = str(value or "")
     return bool(text) and any(marker in text for marker in ("*", "X", "x"))

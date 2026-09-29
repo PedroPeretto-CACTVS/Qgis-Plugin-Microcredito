@@ -30,6 +30,7 @@ from qgis_plugin_microcredito.domain.policy import (
     evaluate_lists,
     list_message,
 )
+from qgis_plugin_microcredito.application.pre_analysis import build_pre_analysis
 
 from .map_output import MAP_PALETTE, MAP_STYLE_BY_CODE
 
@@ -124,7 +125,7 @@ def _footer(canvas, document):
     canvas.setFont("Helvetica", 7)
     canvas.setFillColor(MUTED)
     canvas.drawString(
-        15 * mm, 9 * mm, "Triagem socioambiental - evidência para revisão humana"
+        15 * mm, 9 * mm, "Pré-análise socioambiental - apoio à decisão técnica"
     )
     canvas.drawRightString(195 * mm, 9 * mm, f"Página {document.page}")
     canvas.restoreState()
@@ -393,8 +394,34 @@ def _report_payload(analysis: dict[str, object]) -> dict[str, object]:
             *outcomes.values(),
         ]
     )
-    payload["versao_motor"] = "0.8.0"
-    payload["versao_regras"] = "triagem-2026-09-13"
+    payload["pre_analise"] = build_pre_analysis(payload)
+    payload["versao_motor"] = "0.9.4"
+    payload["versao_regras"] = payload["pre_analise"]["versao_regras"]
+    recorded_decision = payload.get("decisao_tecnica") or {}
+    if (
+        recorded_decision.get("codigo") not in (None, "", "pendente")
+        and recorded_decision.get("pre_analise_sha256")
+        != payload["pre_analise"].get("sha256")
+    ):
+        payload["decisao_tecnica_anterior_invalidada"] = {
+            "motivo": (
+                "Os resultados ou a versão das regras mudaram após a decisão; "
+                "é necessária nova decisão técnica."
+            ),
+            "registrada_em": recorded_decision.get("registrada_em"),
+        }
+        payload.pop("decisao_tecnica", None)
+    payload.setdefault(
+        "decisao_tecnica",
+        {
+            "codigo": "pendente",
+            "rotulo": "Pendente de decisão técnica",
+            "justificativa": "",
+            "responsabilidade": (
+                "Decisão humana do técnico; não produzida automaticamente pela ferramenta."
+            ),
+        },
+    )
     payload["geometria_sha256"] = (payload.get("evidencia_geometria") or {}).get(
         "sha256"
     )
@@ -719,6 +746,108 @@ def _database_evidence_story(analysis: dict[str, object], styles):
     return story
 
 
+def _pre_analysis_story(analysis: dict[str, object], styles):
+    """Apresenta a interpretação das regras e separa a decisão humana."""
+    s = styles
+    pre_analysis = analysis.get("pre_analise") or build_pre_analysis(analysis)
+    classification = str(
+        pre_analysis.get("classificacao_geral") or "inconclusivo"
+    )
+    background = (
+        PALE_GREEN if classification == "sem_indicio_impedimento" else PALE_YELLOW
+    )
+    story = [
+        Table(
+            [
+                [
+                    Paragraph("Resumo da pré-análise", s["Cell"]),
+                    Paragraph(
+                        f"<b>{_escape(pre_analysis.get('classificacao_geral_rotulo'))}</b>",
+                        s["BodySmall"],
+                    ),
+                ]
+            ],
+            colWidths=[42 * mm, 138 * mm],
+            style=TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), background),
+                    ("BOX", (0, 0), (-1, -1), 0.8, GREEN),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("PADDING", (0, 0), (-1, -1), 8),
+                ]
+            ),
+        ),
+        Spacer(1, 2 * mm),
+        Paragraph(_escape(pre_analysis.get("resumo")), s["BodySmall"]),
+        Paragraph("Entendimento das regras e conclusão preliminar", s["Section"]),
+    ]
+    rows = [
+        [
+            _p(value, s["CellWhite"])
+            for value in (
+                "Regra/fonte",
+                "Conclusão preliminar",
+                "Fundamento",
+                "Providência técnica",
+            )
+        ]
+    ]
+    for item in pre_analysis.get("regras") or []:
+        foundation = (
+            f"{item.get('entendimento_regra', '')} Resultado: "
+            f"{item.get('fundamento_resultado', '')}"
+        )
+        reference = str(item.get("referencia") or "").strip()
+        if reference:
+            foundation += f" Referência: {reference}."
+        rows.append(
+            [
+                _p(item.get("regra"), s["Cell"]),
+                _p(item.get("classificacao_rotulo"), s["Cell"]),
+                _p(foundation, s["Cell"]),
+                _p(item.get("providencia_tecnica"), s["Cell"]),
+            ]
+        )
+    story.append(_table(rows, [36 * mm, 38 * mm, 58 * mm, 48 * mm]))
+
+    decision = analysis.get("decisao_tecnica") or {}
+    story.extend(
+        [
+            Paragraph("Decisão do técnico responsável", s["Section"]),
+            _table(
+                [
+                    [
+                        _p("Decisão", s["CellWhite"]),
+                        _p("Justificativa", s["CellWhite"]),
+                        _p("Registrada em", s["CellWhite"]),
+                    ],
+                    [
+                        _p(
+                            decision.get("rotulo")
+                            or "Pendente de decisão técnica",
+                            s["Cell"],
+                        ),
+                        _p(
+                            decision.get("justificativa")
+                            or "Ainda não registrada.",
+                            s["Cell"],
+                        ),
+                        _p(decision.get("registrada_em") or "Pendente", s["Cell"]),
+                    ],
+                ],
+                [48 * mm, 92 * mm, 40 * mm],
+            ),
+            Paragraph(
+                "A classificação preliminar foi produzida pela ferramenta. A "
+                "decisão é humana e deve considerar documentos, exceções e as "
+                "políticas da instituição.",
+                s["Foot"],
+            ),
+        ]
+    )
+    return story
+
+
 def _analysis_story(analysis: dict[str, object], styles, batch_document: str = ""):
     s = styles
     story = []
@@ -732,39 +861,8 @@ def _analysis_story(analysis: dict[str, object], styles, batch_document: str = "
                 s["Foot"],
             ),
         ]
-    story += [
-        Table(
-            [
-                [
-                    Paragraph("Resultado geral", s["Cell"]),
-                    Paragraph(
-                        f"<b>{_escape(_label(analysis.get('resultado_geral')))}</b>",
-                        s["BodySmall"],
-                    ),
-                ]
-            ],
-            colWidths=[38 * mm, 142 * mm],
-            style=TableStyle(
-                [
-                    (
-                        "BACKGROUND",
-                        (0, 0),
-                        (-1, -1),
-                        (
-                            PALE_GREEN
-                            if analysis.get("resultado_geral")
-                            == "sem_ocorrencia_identificada"
-                            else PALE_YELLOW
-                        ),
-                    ),
-                    ("BOX", (0, 0), (-1, -1), 0.8, GREEN),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("PADDING", (0, 0), (-1, -1), 8),
-                ]
-            ),
-        ),
-        Paragraph("Identificação", s["Section"]),
-    ]
+    story += _pre_analysis_story(analysis, s)
+    story.append(Paragraph("Identificação", s["Section"]))
     car_value = str(analysis.get("car") or "")
     story.append(
         _table(
@@ -784,6 +882,36 @@ def _analysis_story(analysis: dict[str, object], styles, batch_document: str = "
                 ],
             ],
             [100 * mm, 30 * mm, 50 * mm],
+        )
+    )
+    story.append(Spacer(1, 2 * mm))
+    source_mode = (
+        f"Sugerida pela UF {analysis.get('fonte_recursos_uf') or 'não identificada'}; "
+        "confirmar na proposta"
+        if analysis.get("fonte_recursos_modo") == "sugerida_pela_uf"
+        else "Escolha manual"
+    )
+    story.append(
+        _table(
+            [
+                [
+                    _p("Fonte de recursos", s["CellWhite"]),
+                    _p("Forma de seleção", s["CellWhite"]),
+                    _p("Linha de crédito informada", s["CellWhite"]),
+                ],
+                [
+                    _p(
+                        analysis.get("fundo_constitucional") or "Não informado",
+                        s["Cell"],
+                    ),
+                    _p(source_mode, s["Cell"]),
+                    _p(
+                        analysis.get("programa_financiamento") or "Não informado",
+                        s["Cell"],
+                    ),
+                ],
+            ],
+            [38 * mm, 62 * mm, 80 * mm],
         )
     )
     story.append(
@@ -864,7 +992,7 @@ def _analysis_story(analysis: dict[str, object], styles, batch_document: str = "
     )
     story += [
         Paragraph(mma_text, s["BodySmall"]),
-        Paragraph("Cruzamentos territoriais", s["Section"]),
+        Paragraph("Evidências dos cruzamentos territoriais", s["Section"]),
     ]
     rows = [
         [
@@ -914,7 +1042,7 @@ def _analysis_story(analysis: dict[str, object], styles, batch_document: str = "
             [
                 [
                     Paragraph(
-                        "<b>Uso do relatório:</b> triagem para revisão humana. Uma sobreposição não determina, isoladamente, impedimento ao crédito. Verifique vigência, atributos, exceções e documentos comprobatórios previstos no MCR. O JSON que acompanha o PDF conserva os mesmos resultados em formato estruturado.",
+                        "<b>Uso do relatório:</b> apoio à decisão técnica. A ferramenta interpreta as regras e aponta possíveis impedimentos, lacunas e providências; não aprova nem recusa a contratação automaticamente. O JSON conserva os resultados e a decisão humana em formato estruturado.",
                         s["BodySmall"],
                     )
                 ]
@@ -964,9 +1092,9 @@ def _write_report_files(
     )
     s = _styles()
     story = [
-        Paragraph("Relatório de triagem socioambiental", s["ReportTitle"]),
+        Paragraph("Relatório de pré-análise socioambiental", s["ReportTitle"]),
         Paragraph(
-            f"CAR e microcrédito rural | Emitido em {_escape(payload['emitido_em'])}",
+            f"Apoio à decisão técnica de crédito rural | Emitido em {_escape(payload['emitido_em'])}",
             s["Foot"],
         ),
         Spacer(1, 5 * mm),
@@ -986,7 +1114,7 @@ def _write_report_files(
             )
         )
     story += _analysis_story(payload, s)
-    _document(pdf_path, "Relatório de triagem socioambiental").build(
+    _document(pdf_path, "Relatório de pré-análise socioambiental").build(
         story, onFirstPage=_footer, onLaterPages=_footer
     )
     if not pdf_path.is_file() or pdf_path.stat().st_size == 0:
@@ -1024,12 +1152,15 @@ def _write_batch_report_files(
             if item.get("documento_lote")
         }
     )
-    occurrences = sum(
-        item.get("resultado_geral") == "ocorrencia_para_analise"
+    possible_impediments = sum(
+        (item.get("pre_analise") or {}).get("classificacao_geral")
+        == "possivel_impedimento"
         for item in report_analyses
     )
     story = [
-        Paragraph("Relatório consolidado de triagem socioambiental", s["ReportTitle"]),
+        Paragraph(
+            "Relatório consolidado de pré-análise socioambiental", s["ReportTitle"]
+        ),
         Paragraph(
             f"Consulta em lista - usuário supremo | Emitido em {_escape(emitted)}",
             s["Foot"],
@@ -1042,14 +1173,14 @@ def _write_batch_report_files(
                     for x in (
                         "CPF/CNPJ",
                         "CAR analisados",
-                        "Ocorrências",
+                        "Possíveis impedimentos",
                         "Não analisados",
                     )
                 ],
                 [
                     _p(len(documents), s["Cell"]),
                     _p(len(report_analyses), s["Cell"]),
-                    _p(occurrences, s["Cell"]),
+                    _p(possible_impediments, s["Cell"]),
                     _p(len(failures), s["Cell"]),
                 ],
             ],
@@ -1070,14 +1201,27 @@ def _write_batch_report_files(
             ),
         )
     rows = [
-        [_p(x, s["CellWhite"]) for x in ("CPF/CNPJ", "CAR", "Resultado", "Referência")]
+        [
+            _p(x, s["CellWhite"])
+            for x in (
+                "CPF/CNPJ",
+                "CAR",
+                "Resumo da pré-análise",
+                "Referência",
+            )
+        ]
     ]
     for item in report_analyses:
         rows.append(
             [
                 _p(item.get("documento_lote"), s["Cell"]),
                 _p(item.get("car"), s["Cell"]),
-                _p(_label(item.get("resultado_geral")), s["Cell"]),
+                _p(
+                    (item.get("pre_analise") or {}).get(
+                        "classificacao_geral_rotulo"
+                    ),
+                    s["Cell"],
+                ),
                 _p(item.get("referencia_interna"), s["Cell"]),
             ]
         )
@@ -1105,7 +1249,7 @@ def _write_batch_report_files(
             )
             previous_document = document
         story += _analysis_story(item, s, document)
-    _document(pdf_path, "Relatório consolidado de triagem socioambiental").build(
+    _document(pdf_path, "Relatório consolidado de pré-análise socioambiental").build(
         story, onFirstPage=_footer, onLaterPages=_footer
     )
     if not pdf_path.is_file() or pdf_path.stat().st_size == 0:

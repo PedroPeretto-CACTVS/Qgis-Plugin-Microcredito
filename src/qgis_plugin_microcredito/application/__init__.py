@@ -5,6 +5,7 @@ from qgis_plugin_microcredito.application.import_service import (
     ImportResult,
     import_file,
 )
+from qgis_plugin_microcredito.application.pre_analysis import build_pre_analysis
 from qgis_plugin_microcredito.application.query_service import (
     find_by_car,
     find_by_document,
@@ -17,6 +18,7 @@ from qgis_plugin_microcredito.application.query_service import (
 __all__ = [
     "ImportResult",
     "file_sha256",
+    "build_pre_analysis",
     "find_by_car",
     "find_by_document",
     "find_documents_by_car",

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import gzip
+import re
 import shutil
 import sqlite3
 import unittest
 import uuid
+import zipfile
 from pathlib import Path
 
 from database.schema import initialize
@@ -19,7 +21,11 @@ from qgis_plugin_microcredito.application.query_service import (
     find_operation_context,
     find_slave_labor_by_documents,
 )
-from qgis_plugin_microcredito.domain.normalize import normalize_car, normalize_document
+from qgis_plugin_microcredito.domain.normalize import (
+    mask_document,
+    normalize_car,
+    normalize_document,
+)
 
 
 class CoreTests(unittest.TestCase):
@@ -32,6 +38,11 @@ class CoreTests(unittest.TestCase):
         )
         rows = read_xlsx_rows(template)
         self.assertEqual(tuple(rows[0]), MAIN_HEADERS)
+        with zipfile.ZipFile(template) as archive:
+            sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+        self.assertEqual(len(re.findall(r"<(?:x:)?dataValidation(?:\s|>)", sheet)), 2)
+        self.assertIn('sqref="D2:D500"', sheet)
+        self.assertIn('sqref="E2:E500"', sheet)
 
     def setUp(self):
         self.root = Path(".test-data") / uuid.uuid4().hex
@@ -55,6 +66,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(normalize_document("123"), "")
         self.assertEqual(normalize_car("MT-123.abc"), "MT123ABC")
         self.assertEqual(normalize_car("-1"), "")
+        self.assertEqual(mask_document("123.456.789-01"), "***.***.***-01")
 
     def test_import_and_find_direct_and_operation_links(self):
         borrowers = self._gz(

@@ -376,10 +376,14 @@ class QgisRegressionTests(unittest.TestCase):
             "CPF_CNPJ",
             "CAR",
             "PROPRIETARIO_POSSUIDOR",
+            "FONTE_RECURSOS",
+            "LINHA_CREDITO",
             "REFERENCIA_INTERNA",
             "OBSERVACAO",
         ]
-        rows = [headers] + [["12345678901", car, "", "", ""] for car in cars]
+        rows = [headers] + [
+            ["12345678901", car, "", "AUTO", "Pronaf B", "", ""] for car in cars
+        ]
         xml_rows = []
         for number, values in enumerate(rows, 1):
             cells = "".join(

@@ -2,29 +2,28 @@ from __future__ import annotations
 
 import re
 import zipfile
-from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from qgis_plugin_microcredito.domain.financing import (
+    AUTOMATIC_RESOURCE_SOURCE,
+    CREDIT_LINES,
+    RESOURCE_SOURCES,
+    normalize_credit_line,
+    normalize_resource_source_choice,
+)
+from qgis_plugin_microcredito.domain.models import BatchRow
 from qgis_plugin_microcredito.domain.normalize import normalize_car, normalize_document
 
 MAIN_HEADERS = (
     "CPF_CNPJ",
     "CAR",
     "PROPRIETARIO_POSSUIDOR",
+    "FONTE_RECURSOS",
+    "LINHA_CREDITO",
     "REFERENCIA_INTERNA",
     "OBSERVACAO",
 )
-
-
-@dataclass(frozen=True)
-class BatchRow:
-    source_row: int
-    document: str
-    car: str = ""
-    owner_document: str = ""
-    internal_reference: str = ""
-    observation: str = ""
 
 
 def _column_number(reference: str) -> int:
@@ -154,12 +153,33 @@ def read_batch_xlsx(path: str | Path) -> list[BatchRow]:
         raw_car = value(row, "CAR")
         if raw_car and not normalize_car(raw_car):
             errors.append(f"linha {source_row}: CAR ausente ou inválido")
+        raw_resource_source = value(row, "FONTE_RECURSOS")
+        resource_source = normalize_resource_source_choice(raw_resource_source)
+        if not resource_source:
+            allowed = ", ".join(
+                (
+                    AUTOMATIC_RESOURCE_SOURCE,
+                    *(code for code, _ in RESOURCE_SOURCES),
+                )
+            )
+            errors.append(
+                f"linha {source_row}: FONTE_RECURSOS deve ser uma das opções: {allowed}"
+            )
+        raw_credit_line = value(row, "LINHA_CREDITO")
+        credit_line = normalize_credit_line(raw_credit_line)
+        if not credit_line:
+            errors.append(
+                f"linha {source_row}: LINHA_CREDITO deve ser uma das opções: "
+                + "; ".join(CREDIT_LINES)
+            )
         parsed.append(
             BatchRow(
                 source_row=source_row,
                 document=document,
                 car=value(row, "CAR"),
                 owner_document=owner,
+                resource_source=resource_source,
+                credit_line=credit_line,
                 internal_reference=value(row, "REFERENCIA_INTERNA"),
                 observation=value(row, "OBSERVACAO"),
             )

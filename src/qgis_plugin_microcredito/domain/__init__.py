@@ -3,6 +3,7 @@
 from qgis_plugin_microcredito.domain.enums import ImportType, LinkType, Verdict
 from qgis_plugin_microcredito.domain.normalize import (
     is_masked_document,
+    mask_document,
     normalize_car,
     normalize_document,
     normalize_header,
@@ -33,6 +34,7 @@ __all__ = [
     "evaluate_lists",
     "is_masked_document",
     "list_message",
+    "mask_document",
     "normalize_car",
     "normalize_document",
     "normalize_header",

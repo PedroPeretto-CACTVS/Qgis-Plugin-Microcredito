@@ -29,6 +29,11 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from qgis_plugin_microcredito.application.hashing import file_sha256
+from qgis_plugin_microcredito.application.pre_analysis import build_pre_analysis
+from qgis_plugin_microcredito.domain.financing import (
+    AUTOMATIC_RESOURCE_SOURCE,
+    resolve_resource_source,
+)
 from qgis_plugin_microcredito.domain.policy import (
     aggregate,
     evaluate_lists,
@@ -143,17 +148,25 @@ class BatchWindow(QDialog):
         )
         self.status.setObjectName("status")
         self.status.setWordWrap(True)
-        self.table = QTableWidget(0, 5)
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
-            ("Linha", "CPF/CNPJ", "CAR", "Status", "Resultado ou mensagem")
+            (
+                "Linha",
+                "CPF/CNPJ",
+                "CAR",
+                "Fonte",
+                "Linha de crédito",
+                "Status",
+                "Pré-análise ou mensagem",
+            )
         )
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        for index in range(4):
+        for index in range(6):
             header.setSectionResizeMode(index, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        header.setSectionResizeMode(6, QHeaderView.Stretch)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -282,8 +295,10 @@ class BatchWindow(QDialog):
                 self._set_cell(index, 0, row.source_row)
                 self._set_cell(index, 1, row.document)
                 self._set_cell(index, 2, row.car or "Localizar pelo CPF/CNPJ")
-                self._set_cell(index, 3, "Válido")
-                self._set_cell(index, 4, "Aguardando processamento")
+                self._set_cell(index, 3, row.resource_source)
+                self._set_cell(index, 4, row.credit_line)
+                self._set_cell(index, 5, "Válido")
+                self._set_cell(index, 6, "Aguardando processamento")
             self.status.setText(
                 f"Planilha válida: {len(self.rows)} linha(s). Linhas sem CAR serão expandidas pelos vínculos do Sicor."
             )
@@ -320,7 +335,15 @@ class BatchWindow(QDialog):
                 }
             )
             for column, value in enumerate(
-                (row.source_row, row.document, pending["car"], "Cancelado", message)
+                (
+                    row.source_row,
+                    row.document,
+                    pending["car"],
+                    row.resource_source,
+                    row.credit_line,
+                    "Cancelado",
+                    message,
+                )
             ):
                 self._set_cell(table_row, column, value)
 
@@ -499,6 +522,9 @@ class BatchWindow(QDialog):
         overall = aggregate(
             [environmental["resultado_geral"], *source_results.values()]
         )
+        resource_source, source_mode, source_state = resolve_resource_source(
+            row.resource_source, car
+        )
         analysis = {
             "resultado_geral": overall,
             "resultado_fontes": source_results,
@@ -519,6 +545,10 @@ class BatchWindow(QDialog):
                     if item.get("documento_normalizado")
                 }
             ),
+            "fundo_constitucional": resource_source,
+            "fonte_recursos_modo": source_mode,
+            "fonte_recursos_uf": source_state,
+            "programa_financiamento": row.credit_line,
             **database_evidence,
             "planilha_sha256": self.spreadsheet_sha256,
             "documento_lote": row.document,
@@ -526,6 +556,7 @@ class BatchWindow(QDialog):
             "referencia_interna": row.internal_reference,
             "observacao_planilha": row.observation,
         }
+        analysis["pre_analise"] = build_pre_analysis(analysis)
         if self.include_maps.isChecked():
             map_legend = []
             map_path = render_analysis_map(
@@ -574,11 +605,21 @@ class BatchWindow(QDialog):
                         self._record_cancelled_tasks(index, failures)
                         break
                     row: BatchRow = task["row"]
+                    resolved_source, _, _ = resolve_resource_source(
+                        row.resource_source, task["car"]
+                    )
+                    displayed_source = (
+                        f"AUTO → {resolved_source}"
+                        if row.resource_source == AUTOMATIC_RESOURCE_SOURCE
+                        else row.resource_source
+                    )
                     for column, value in enumerate(
                         (
                             row.source_row,
                             row.document,
                             task["car"],
+                            displayed_source,
+                            row.credit_line,
                             "Processando",
                             "Consultando bases…",
                         )
@@ -603,8 +644,12 @@ class BatchWindow(QDialog):
                             functions,
                         )
                         analyses.append(analysis)
-                        self._set_cell(index, 3, "Concluído")
-                        self._set_cell(index, 4, analysis["resultado_geral"])
+                        self._set_cell(index, 5, "Concluído")
+                        self._set_cell(
+                            index,
+                            6,
+                            analysis["pre_analise"]["classificacao_geral_rotulo"],
+                        )
                     except Exception as exc:
                         cancelled = (
                             self.cancel_requested
@@ -619,10 +664,10 @@ class BatchWindow(QDialog):
                                 "erro": str(exc),
                             }
                         )
-                        self._set_cell(index, 3, "Cancelado" if cancelled else "Falha")
+                        self._set_cell(index, 5, "Cancelado" if cancelled else "Falha")
                         self._set_cell(
                             index,
-                            4,
+                            6,
                             "Processamento cancelado pelo usuário."
                             if cancelled
                             else str(exc),
