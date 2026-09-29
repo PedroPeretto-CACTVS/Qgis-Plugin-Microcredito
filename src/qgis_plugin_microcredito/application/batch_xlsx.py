@@ -26,6 +26,18 @@ MAIN_HEADERS = (
 )
 
 
+def batch_task_identity(
+    row: BatchRow, normalized_car: str
+) -> tuple[str, str, str, str]:
+    """Identify analyses that share the same borrower, CAR, and financing context."""
+    return (
+        row.document,
+        normalized_car,
+        row.resource_source,
+        row.credit_line,
+    )
+
+
 def _column_number(reference: str) -> int:
     letters = re.match(r"[A-Z]+", reference.upper())
     number = 0
