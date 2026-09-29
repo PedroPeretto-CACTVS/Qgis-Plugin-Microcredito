@@ -42,6 +42,27 @@ def test_inventory_reports_publication_blockers_without_exposing_root(
     assert str(tmp_path) not in json.dumps(report, ensure_ascii=False)
 
 
+def test_inventory_redacts_explicit_mte_source_path(tmp_path: Path) -> None:
+    mte_source = tmp_path / "usuario-operador" / "restrito" / "cadastro-mte.csv"
+
+    report = inventory(tmp_path / "dados", mte_source)
+
+    mte_package = next(
+        package for package in report["packages"] if package["id"] == "mte"
+    )
+    assert mte_package["sources"] == [
+        {
+            "path": "cadastro-mte.csv",
+            "path_included": False,
+            "present": False,
+            "size_bytes": None,
+            "fits_github_release": False,
+        }
+    ]
+    assert "cadastro-mte.csv" in report["missing_sources"]
+    assert str(mte_source.parent) not in json.dumps(report, ensure_ascii=False)
+
+
 def test_sicar_routing_audit_emits_only_aggregates(tmp_path: Path) -> None:
     for uf in UFS:
         identifiers = [f"{uf}-REGISTRO"]
