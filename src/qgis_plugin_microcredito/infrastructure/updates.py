@@ -8,8 +8,10 @@ assinatura e promove a nova base localmente depois de preparar uma cópia.
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import hmac
+import importlib
 import json
 import os
 import re
@@ -23,7 +25,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, BinaryIO
 
 from database.schema import initialize
 from database.session import connect
@@ -96,6 +98,10 @@ PUBLISHER_PUBLIC_KEY_PEM = HOMOLOGATION_PUBLISHER_PUBLIC_KEY_PEM
 
 class UpdateError(ValueError):
     """Falha segura de catálogo, download, validação ou promoção."""
+
+
+class _UpdateLockBusy(UpdateError):
+    """Outro processo mantém o bloqueio exclusivo das bases."""
 
 
 @dataclass(frozen=True)
@@ -1044,29 +1050,94 @@ def update_lock_path(data_root: str | Path) -> Path:
     return Path(data_root).resolve() / UPDATE_DIRECTORY / LOCK_FILENAME
 
 
+@dataclass
+class _UpdateLock:
+    stream: BinaryIO
+
+
+def _try_lock_stream(stream: BinaryIO) -> bool:
+    stream.seek(0, os.SEEK_END)
+    if stream.tell() == 0:
+        stream.write(b"\0")
+        stream.flush()
+    stream.seek(0)
+    try:
+        if os.name == "nt":
+            msvcrt = importlib.import_module("msvcrt")
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl = importlib.import_module("fcntl")
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if exc.errno in {errno.EACCES, errno.EAGAIN}:
+            return False
+        raise
+    return True
+
+
+def _unlock_stream(stream: BinaryIO) -> None:
+    stream.seek(0)
+    if os.name == "nt":
+        msvcrt = importlib.import_module("msvcrt")
+        msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl = importlib.import_module("fcntl")
+        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
 def ensure_not_updating(data_root: str | Path) -> None:
-    if update_lock_path(data_root).exists():
+    try:
+        lock = _acquire_update_lock(Path(data_root), record_timestamp=False)
+    except _UpdateLockBusy as exc:
         raise UpdateError(
             "Uma atualização de bases está em andamento. Aguarde a conclusão antes de consultar."
-        )
+        ) from exc
+    _release_update_lock(lock)
 
 
-def _acquire_update_lock(data_root: Path) -> Path:
+def _acquire_update_lock(
+    data_root: Path, *, record_timestamp: bool = True
+) -> _UpdateLock:
     path = update_lock_path(data_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError as exc:
+        stream = path.open("a+b")
+    except OSError as exc:
         raise UpdateError(
-            "Já existe uma atualização ou restauração em andamento. A base local foi preservada."
+            "Não foi possível acessar o bloqueio de atualização das bases."
         ) from exc
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        stream.write(datetime.now(UTC).isoformat())
-    return path
+    try:
+        acquired = _try_lock_stream(stream)
+    except OSError as exc:
+        stream.close()
+        raise UpdateError(
+            "Não foi possível acessar o bloqueio de atualização das bases."
+        ) from exc
+    if not acquired:
+        stream.close()
+        raise _UpdateLockBusy(
+            "Já existe uma atualização ou restauração em andamento. A base local foi preservada."
+        )
+    lock = _UpdateLock(stream=stream)
+    if record_timestamp:
+        try:
+            stream.seek(0)
+            stream.truncate()
+            stream.write(datetime.now(UTC).isoformat().encode("utf-8"))
+            stream.flush()
+        except OSError as exc:
+            _release_update_lock(lock)
+            raise UpdateError(
+                "Não foi possível registrar o bloqueio de atualização das bases."
+            ) from exc
+    return lock
 
 
-def _release_update_lock(path: Path) -> None:
-    path.unlink(missing_ok=True)
+def _release_update_lock(lock: _UpdateLock) -> None:
+    try:
+        _unlock_stream(lock.stream)
+    finally:
+        lock.stream.close()
 
 
 class LocalUpdater:

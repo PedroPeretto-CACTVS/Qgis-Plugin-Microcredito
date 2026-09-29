@@ -23,12 +23,16 @@ from qgis_plugin_microcredito.infrastructure.updates import (
     CatalogPackage,
     LocalUpdater,
     UpdateError,
+    _acquire_update_lock,
     _companion_signature_url,
     _parse_catalog,
+    _release_update_lock,
     _SecureHttpsRedirectHandler,
+    ensure_not_updating,
     latest_restore_point,
     local_inventory,
     restore_latest,
+    update_lock_path,
     verify_catalog_signature,
 )
 
@@ -98,6 +102,26 @@ class UpdateTests(unittest.TestCase):
             verify_catalog_signature(
                 payload + b" ", TEST_SIGNATURE, TEST_PUBLISHER_PUBLIC_KEY_PEM
             )
+
+    def test_stale_update_lock_file_does_not_block_operations(self):
+        lock_path = update_lock_path(self.root)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text("2026-01-01T00:00:00+00:00", encoding="utf-8")
+
+        ensure_not_updating(self.root)
+
+    def test_update_lock_blocks_only_while_held_by_a_process(self):
+        lock = _acquire_update_lock(self.root)
+        try:
+            with self.assertRaisesRegex(UpdateError, "andamento"):
+                ensure_not_updating(self.root)
+            with self.assertRaisesRegex(UpdateError, "andamento"):
+                _acquire_update_lock(self.root)
+        finally:
+            _release_update_lock(lock)
+
+        self.assertTrue(update_lock_path(self.root).exists())
+        ensure_not_updating(self.root)
 
     def test_inventory_uses_regulatory_names_instead_of_raw_table_names(self):
         inventory = local_inventory(self.root, self.database)
