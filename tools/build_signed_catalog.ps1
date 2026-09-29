@@ -19,8 +19,8 @@ A chave privada deve vir de cofre/caminho corporativo fora do repositório.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-    throw "A assinatura exige PowerShell 7 (pwsh), que oferece importação segura de chave PEM."
+if ($PSVersionTable.PSVersion -lt [version]"7.5") {
+    throw "A assinatura exige PowerShell 7.5+ (pwsh): importação segura de chave PEM e ConvertFrom-Json -DateKind."
 }
 
 function Require-String($Value, [string]$Field, [int]$Maximum = 500) {
