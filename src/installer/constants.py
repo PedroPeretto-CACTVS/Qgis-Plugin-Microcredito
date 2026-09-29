@@ -1,12 +1,8 @@
 from __future__ import annotations
 
+import tomllib
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-
-try:
-    PLUGIN_VERSION = version("qgis-plugin-microcredito")
-except PackageNotFoundError:
-    PLUGIN_VERSION = "0.8.0"
 
 
 def repository_root() -> Path:
@@ -25,6 +21,21 @@ def repository_root() -> Path:
         "Não foi possível localizar o repositório (pyproject.toml e src/plugin). "
         "Execute o empacotamento a partir da árvore de fontes do projeto."
     )
+
+
+def _plugin_version() -> str:
+    try:
+        root = repository_root()
+        document = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        return str(document["project"]["version"])
+    except (FileNotFoundError, KeyError, tomllib.TOMLDecodeError):
+        try:
+            return version("qgis-plugin-microcredito")
+        except PackageNotFoundError:
+            return "0.9.4"
+
+
+PLUGIN_VERSION = _plugin_version()
 
 
 UFS = tuple(
