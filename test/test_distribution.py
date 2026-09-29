@@ -50,7 +50,7 @@ class DistributionTests(unittest.TestCase):
                 ):
                     self.assertIn(required, manifest)
                 self.assertEqual("supreme_mode.txt" in manifest, supreme)
-                self.assertIn(b"version=0.9.4", archive.read(package + "/metadata.txt"))
+                self.assertIn(b"version=0.9.5", archive.read(package + "/metadata.txt"))
 
     def test_twenty_seven_duplicate_states_do_not_pass(self):
         for index in range(27):

@@ -29,6 +29,9 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from qgis_plugin_microcredito.application.hashing import file_sha256
+from qgis_plugin_microcredito.application.owner_documents import (
+    require_owner_documents,
+)
 from qgis_plugin_microcredito.application.pre_analysis import build_pre_analysis
 from qgis_plugin_microcredito.domain.financing import (
     AUTOMATIC_RESOURCE_SOURCE,
@@ -466,10 +469,20 @@ class BatchWindow(QDialog):
         operation = {"ref_bacen": "", "nu_ordem": "", "estado": car[:2]}
         collection = {"type": "FeatureCollection", "features": []}
         documents = find_documents(connection, car)
-        supplied = [row.document, row.owner_document]
-        for document in supplied:
-            if document and not any(
+        supplied = (
+            (row.document, "documento_informado_na_planilha"),
+            (
+                row.owner_document,
+                "proprietario_possuidor_informado_manualmente",
+            ),
+        )
+        for document, link_type in supplied:
+            already_linked = any(
                 item.get("documento_normalizado") == document for item in documents
+            )
+            if document and (
+                link_type == "proprietario_possuidor_informado_manualmente"
+                or not already_linked
             ):
                 documents.append(
                     {
@@ -479,12 +492,13 @@ class BatchWindow(QDialog):
                         "documento_original": document,
                         "documento_normalizado": document,
                         "documento_mascarado": 0,
-                        "tipo_vinculo": "documento_informado_na_planilha",
+                        "tipo_vinculo": link_type,
                         "base_origem": "PLANILHA_USUARIO_SUPREMO",
                         "arquivo": self.xlsx_path.text(),
                         "importado_em": "",
                     }
                 )
+        owner_documents = require_owner_documents(documents)
         labor = find_slave(
             connection,
             [str(item.get("documento_normalizado") or "") for item in documents],
@@ -532,6 +546,7 @@ class BatchWindow(QDialog):
             "operacao": operation,
             "mma_mcr": mma,
             "documentos_associados": documents,
+            "documentos_proprietario_possuidor": owner_documents,
             "trabalho_escravo": labor,
             "ambiental": environmental,
             "geometria_empreendimento": str(target),

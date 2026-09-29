@@ -1,6 +1,6 @@
 [project]
 name = "qgis-plugin-microcredito"
-version = "0.9.4"
+version = "0.9.5"
 description = "Triagem socioambiental de CAR para apoio à análise de microcrédito rural"
 readme = "README.md"
 authors = [

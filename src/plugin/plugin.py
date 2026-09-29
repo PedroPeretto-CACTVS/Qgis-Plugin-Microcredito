@@ -59,6 +59,9 @@ from qgis_plugin_microcredito.application.pre_analysis import (
     TECHNICAL_DECISIONS,
     build_pre_analysis,
 )
+from qgis_plugin_microcredito.application.owner_documents import (
+    require_owner_documents,
+)
 from qgis_plugin_microcredito.domain.financing import (
     AUTOMATIC_RESOURCE_SOURCE,
     CREDIT_LINES,
@@ -1618,10 +1621,7 @@ class SearchWindow(QDialog):
                         "Informe 11 dígitos para CPF ou 14 dígitos para CNPJ do proprietário/possuidor.",
                     )
                     return
-                if manual_document and not any(
-                    item.get("documento_normalizado") == manual_document
-                    for item in associated_documents
-                ):
+                if manual_document:
                     associated_documents.append(
                         {
                             "car_original": self.car.text().strip(),
@@ -1630,18 +1630,22 @@ class SearchWindow(QDialog):
                             "documento_original": manual_raw,
                             "documento_normalizado": manual_document,
                             "documento_mascarado": 0,
-                            "tipo_vinculo": "proprietario_possuidor_informado_manualmente",
+                            "tipo_vinculo": (
+                                "proprietario_possuidor_informado_manualmente"
+                            ),
                             "base_origem": "INFORMACAO_DO_USUARIO",
                             "arquivo": "",
                             "importado_em": "",
                         }
                     )
-                if not associated_documents:
+                try:
+                    owner_documents = require_owner_documents(associated_documents)
+                except ValueError as exc:
                     self._set_owner_required(True)
                     QMessageBox.information(
                         self,
                         "Proprietário/possuidor necessário",
-                        "O CAR não retornou CPF/CNPJ no Sicor. Preencha o campo vermelho para realizar a consulta no cadastro do MTE.",
+                        str(exc),
                     )
                     return
                 self._set_owner_required(False)
@@ -1728,6 +1732,7 @@ class SearchWindow(QDialog):
                 "operacao": result,
                 "mma_mcr": mma,
                 "documentos_associados": associated_documents,
+                "documentos_proprietario_possuidor": owner_documents,
                 "trabalho_escravo": slave_labor,
                 "ambiental": environmental,
                 "geometria_empreendimento": str(target_path),
