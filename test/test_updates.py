@@ -91,6 +91,28 @@ class UpdateTests(unittest.TestCase):
             **kwargs,
         )
 
+    def _write_geopackage(self, path, identifiers):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(path)
+        try:
+            connection.executescript("""
+                CREATE TABLE gpkg_contents(table_name TEXT, data_type TEXT);
+                CREATE TABLE gpkg_geometry_columns(table_name TEXT, srs_id INTEGER);
+                CREATE TABLE gpkg_spatial_ref_sys(srs_id INTEGER);
+                CREATE TABLE AREA_IMOVEL(cod_imovel TEXT, geom BLOB);
+                INSERT INTO gpkg_contents VALUES('AREA_IMOVEL','features');
+                INSERT INTO gpkg_geometry_columns VALUES('AREA_IMOVEL',4674);
+                INSERT INTO gpkg_spatial_ref_sys VALUES(4674);
+            """)
+            connection.executemany(
+                "INSERT INTO AREA_IMOVEL VALUES(?, x'00')",
+                ((identifier,) for identifier in identifiers),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        return path
+
     def test_catalog_signature_is_verified_and_tampering_is_rejected(self):
         payload = b'{"schema_version":1}'
         verify_catalog_signature(payload, TEST_SIGNATURE, TEST_PUBLISHER_PUBLIC_KEY_PEM)
@@ -497,6 +519,63 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(undo.restore_version, "2026.09.21")
         restore_latest(self.root, self.database)
         self.assertEqual(target.read_text(encoding="utf-8"), "versao assinada")
+
+    def test_sicar_restore_preserves_each_backed_up_foreign_feature_count(self):
+        target_relative = "car/AL/AL_AREA_IMOVEL.gpkg"
+        target = self._write_geopackage(
+            self.root / target_relative, ("AL-ANTERIOR", "PE-EXCECAO")
+        )
+        published = self._write_geopackage(
+            self.root / "publicado.gpkg",
+            ("AL-PUBLICADO", "PE-EXCECAO", "SP-EXCECAO"),
+        )
+        archive = _package(
+            {
+                "id": "sicar_imoveis_al",
+                "version": "2026.09.21",
+                "strategy": "replace_file",
+                "target": target_relative,
+                "foreign_feature_count": 2,
+                "payloads": {"file": "payload/AL_AREA_IMOVEL.gpkg"},
+            },
+            {"payload/AL_AREA_IMOVEL.gpkg": published.read_bytes()},
+        )
+        package = self._package_descriptor(
+            "sicar_imoveis_al",
+            "replace_file",
+            archive,
+            target=target_relative,
+            foreign_feature_count=2,
+        )
+        LocalUpdater(
+            self.root, self.database, self._client({package.url: archive})
+        ).apply(package)
+        self.assertTrue(
+            validate_geopackage(target, uf="AL", expected_foreign_features=2)
+        )
+
+        point = latest_restore_point(self.root, self.database)
+        metadata_path = self.root / ".h" / Path(point.restore_id) / "restore.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        self.assertEqual(metadata["foreign_feature_count"], 1)
+        metadata.pop("foreign_feature_count")
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        restore_latest(self.root, self.database)
+        self.assertTrue(
+            validate_geopackage(target, uf="AL", expected_foreign_features=1)
+        )
+
+        undo = latest_restore_point(self.root, self.database)
+        undo_metadata = json.loads(
+            (self.root / ".h" / Path(undo.restore_id) / "restore.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(undo_metadata["foreign_feature_count"], 2)
+        restore_latest(self.root, self.database)
+        self.assertTrue(
+            validate_geopackage(target, uf="AL", expected_foreign_features=2)
+        )
 
     def test_database_update_can_be_restored_without_losing_the_replaced_state(self):
         csv = (
