@@ -200,6 +200,7 @@ Os resultados são **evidências para triagem**, não aprovação automática de
 |-----------|----------|
 | [docs/MIGRACAO_GPT_0_9_4.md](docs/MIGRACAO_GPT_0_9_4.md) | Mapa das funcionalidades migradas e publicação segura |
 | [docs/FLUXOGRAMA_APLICACAO_0_9_4.md](docs/FLUXOGRAMA_APLICACAO_0_9_4.md) | Todos os caminhos de consulta, decisão, atualização e restauração |
+| [docs/MODULOS_FISCAIS_0_9_5.md](docs/MODULOS_FISCAIS_0_9_5.md) | Regra territorial, fontes oficiais, persistência e fluxo dos módulos fiscais |
 | [docs/GUIA_VERSAO_0_8.md](docs/GUIA_VERSAO_0_8.md) | Migração de banco, ativação de importações e mudanças da versão |
 | [docs/matriz_conformidade_mcr_fno_fco.md](docs/matriz_conformidade_mcr_fno_fco.md) | Cobertura regulatória MCR, FNO e FCO |
 | [docs/REFACTOR.md](docs/REFACTOR.md) | Contrato de comportamento e guia de refatoração |
