@@ -19,6 +19,7 @@ from database.session import connect
 from qgis_plugin_microcredito.infrastructure.downloads import validate_geopackage
 from qgis_plugin_microcredito.infrastructure.updates import (
     TEST_PUBLISHER_PUBLIC_KEY_PEM,
+    Catalog,
     CatalogClient,
     CatalogPackage,
     LocalUpdater,
@@ -26,6 +27,7 @@ from qgis_plugin_microcredito.infrastructure.updates import (
     _companion_signature_url,
     _parse_catalog,
     _SecureHttpsRedirectHandler,
+    compare_catalog,
     latest_restore_point,
     local_inventory,
     restore_latest,
@@ -90,6 +92,28 @@ class UpdateTests(unittest.TestCase):
             size_bytes=len(archive),
             **kwargs,
         )
+
+    def _replace_file_catalog(
+        self, issued_at: str, version: str, archive: bytes
+    ) -> Catalog:
+        document = {
+            "schema_version": 1,
+            "issued_at": issued_at,
+            "expires_at": "2027-09-01T00:00:00Z",
+            "packages": [
+                {
+                    "id": "fonte_teste",
+                    "label": "Fonte teste",
+                    "version": version,
+                    "strategy": "replace_file",
+                    "url": "https://publisher.example/fonte-teste.zip",
+                    "sha256": hashlib.sha256(archive).hexdigest(),
+                    "size_bytes": len(archive),
+                    "target": "normativos/fonte.txt",
+                }
+            ],
+        }
+        return _parse_catalog(json.dumps(document).encode())
 
     def test_catalog_signature_is_verified_and_tampering_is_rejected(self):
         payload = b'{"schema_version":1}'
@@ -194,6 +218,88 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(len(catalog.packages), 1)
         self.assertEqual(catalog.packages[0].identifier, "mte")
         self.assertEqual(catalog.packages[0].validity_until, "2027-01-01")
+
+    def test_older_catalog_is_not_offered_or_applied(self):
+        target = self.root / "normativos" / "fonte.txt"
+        target.parent.mkdir()
+        target.write_text("versao atual", encoding="utf-8")
+        archive = _package(
+            {
+                "id": "fonte_teste",
+                "version": "2026.08.01",
+                "strategy": "replace_file",
+                "target": "normativos/fonte.txt",
+                "payloads": {"file": "payload/fonte.txt"},
+            },
+            {"payload/fonte.txt": b"versao antiga"},
+        )
+        catalog = self._replace_file_catalog(
+            "2026-09-01T00:00:00Z", "2026.08.01", archive
+        )
+        registry = self.root / ".atualizacoes" / "estado.json"
+        registry.parent.mkdir()
+        registry.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "latest_catalog_issued_at": "2026-09-20T00:00:00+00:00",
+                    "packages": {
+                        "fonte_teste": {
+                            "version": "2026.09.20",
+                            "catalog_issued_at": "2026-09-20T00:00:00+00:00",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        status = compare_catalog(catalog, self.root, self.database)[0]
+
+        self.assertEqual(status.state, "inaplicavel")
+        self.assertIn("anterior", status.detail)
+        with self.assertRaisesRegex(UpdateError, "anterior"):
+            LocalUpdater(
+                self.root,
+                self.database,
+                self._client({catalog.packages[0].url: archive}),
+            ).apply(catalog.packages[0])
+        self.assertEqual(target.read_text(encoding="utf-8"), "versao atual")
+
+    def test_install_records_catalog_date_without_rolling_it_back_on_restore(self):
+        target = self.root / "normativos" / "fonte.txt"
+        target.parent.mkdir()
+        target.write_text("versao anterior", encoding="utf-8")
+        archive = _package(
+            {
+                "id": "fonte_teste",
+                "version": "2026.09.20",
+                "strategy": "replace_file",
+                "target": "normativos/fonte.txt",
+                "payloads": {"file": "payload/fonte.txt"},
+            },
+            {"payload/fonte.txt": b"versao nova"},
+        )
+        catalog = self._replace_file_catalog(
+            "2026-09-20T00:00:00Z", "2026.09.20", archive
+        )
+        LocalUpdater(
+            self.root,
+            self.database,
+            self._client({catalog.packages[0].url: archive}),
+        ).apply(catalog.packages[0])
+
+        registry_path = self.root / ".atualizacoes" / "estado.json"
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        expected = "2026-09-20T00:00:00+00:00"
+        self.assertEqual(registry["latest_catalog_issued_at"], expected)
+        self.assertEqual(
+            registry["packages"]["fonte_teste"]["catalog_issued_at"], expected
+        )
+
+        restore_latest(self.root, self.database)
+        restored_registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        self.assertEqual(restored_registry["latest_catalog_issued_at"], expected)
 
     def test_schema_two_requires_traceable_source_and_maps_known_target(self):
         document = {
