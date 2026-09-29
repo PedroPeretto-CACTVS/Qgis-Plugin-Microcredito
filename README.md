@@ -1,10 +1,10 @@
 # CAR Microcrédito
 
-**Versão 0.8.0** — triagem socioambiental de operações de microcrédito rural com apoio do QGIS.
+**Versão 0.9.4** — triagem socioambiental de operações de microcrédito rural com apoio do QGIS.
 
-O plugin automatiza a consulta de dados públicos (Sicor, MMA/MCR, MTE) e o cruzamento espacial do CAR com camadas ambientais nacionais. Cada análise produz **evidências para revisão humana** (PDF, JSON, mapa e metadados das fontes). **Não substitui a decisão de crédito** nem declara conformidade integral com o MCR.
+O plugin automatiza a consulta de dados públicos (Sicor, MMA/MCR, MTE), o cruzamento espacial do CAR com camadas ambientais nacionais, a pré-análise explicável e a atualização assinada das bases. Cada análise produz **evidências para revisão humana** (PDF, JSON, mapa e metadados das fontes). **Não substitui a decisão de crédito** nem declara conformidade integral com o MCR.
 
-Leia [o guia da versão 0.8](docs/GUIA_VERSAO_0_8.md) para migração de banco e ativação de publicações. A matriz de cobertura regulatória está em [docs/matriz_conformidade_mcr_fno_fco.md](docs/matriz_conformidade_mcr_fno_fco.md).
+Leia [o registro da migração 0.9.4](docs/MIGRACAO_GPT_0_9_4.md), o [fluxograma funcional](docs/FLUXOGRAMA_APLICACAO_0_9_4.md), o [guia da versão 0.8](docs/GUIA_VERSAO_0_8.md) para bancos antigos e a [matriz de cobertura regulatória](docs/matriz_conformidade_mcr_fno_fco.md).
 
 ## O que o sistema faz
 
@@ -96,13 +96,13 @@ Os alvos do `Makefile` são declarados como `.PHONY` para que o Make sempre exec
 ```
 src/
 ├── qgis_plugin_microcredito/   # Núcleo: domínio, casos de uso e infraestrutura
-│   ├── domain/                 # Modelos Pydantic, enums, regras puras (policy)
+│   ├── domain/                 # Dataclasses, enums e regras puras (policy)
 │   ├── application/            # Serviços: importação, consulta, geo, backup
 │   └── infrastructure/         # Leitura de CSV, validação de downloads
 ├── database/                   # SQLAlchemy, schema v3, repositórios, migrações
 ├── cli/                        # CLI `car-microcredito`
 ├── plugin/                     # Superfície QGIS (UI, análise espacial, relatório)
-└── installer/                  # verify, install, plugin-build, package-build
+└── installer/                  # verify, install, plugin-build, package-build, update-package
 assets/                         # Ícones e recursos estáticos do plugin
 test/                           # pytest (espelha a estrutura do pacote)
 docs/                           # Guias, matriz MCR e documentação de refatoração
@@ -153,6 +153,13 @@ uv run car-microcredito-installer package-build --dados dados --variant all
 # Verifica integridade e instala no QGIS
 uv run car-microcredito-installer verify caminho/do/pacote
 uv run car-microcredito-installer install caminho/do/pacote
+
+# Prepara pacotes e catálogo assinado de atualização
+uv run car-microcredito-installer update-package --help
+uv run python tools/inventory_production_sources.py --help
+uv run python tools/validate_production_sources.py --help
+uv run python tools/audit_sicar_state_routing.py --help
+pwsh tools/build_signed_catalog.ps1 -PrepareOnly -TemplatePath catalog.template.json -OutputDirectory saida
 ```
 
 | Variante | Diretório do plugin | Diferença |
@@ -177,6 +184,8 @@ dados/
 
 ## Uso no QGIS
 
+A pré-análise organiza evidências e regras para o técnico; a ferramenta não aprova nem recusa crédito automaticamente.
+
 1. Instale o plugin (ZIP ou instalador).
 2. Ative em **Complementos → Gerenciar e instalar complementos → Instalados**.
 3. Abra **Complementos → CAR Microcrédito**.
@@ -189,6 +198,8 @@ Os resultados são **evidências para triagem**, não aprovação automática de
 
 | Documento | Conteúdo |
 |-----------|----------|
+| [docs/MIGRACAO_GPT_0_9_4.md](docs/MIGRACAO_GPT_0_9_4.md) | Mapa das funcionalidades migradas e publicação segura |
+| [docs/FLUXOGRAMA_APLICACAO_0_9_4.md](docs/FLUXOGRAMA_APLICACAO_0_9_4.md) | Todos os caminhos de consulta, decisão, atualização e restauração |
 | [docs/GUIA_VERSAO_0_8.md](docs/GUIA_VERSAO_0_8.md) | Migração de banco, ativação de importações e mudanças da versão |
 | [docs/matriz_conformidade_mcr_fno_fco.md](docs/matriz_conformidade_mcr_fno_fco.md) | Cobertura regulatória MCR, FNO e FCO |
 | [docs/REFACTOR.md](docs/REFACTOR.md) | Contrato de comportamento e guia de refatoração |
