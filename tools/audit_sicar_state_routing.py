@@ -37,7 +37,7 @@ def _open(path: Path) -> tuple[sqlite3.Connection, str, str]:
 
 def audit(data_root: Path) -> dict[str, object]:
     root = data_root.resolve()
-    routed: dict[tuple[str, str], list[str]] = {}
+    routed: dict[tuple[str, str], set[str]] = {}
     for source_uf in UFS:
         path = root / "car" / source_uf / f"{source_uf}_AREA_IMOVEL.gpkg"
         connection, table, field = _open(path)
@@ -49,12 +49,13 @@ def audit(data_root: Path) -> dict[str, object]:
             for row in rows:
                 value = str(row[0] or "")
                 target_uf = value[:2].upper() if len(value) >= 2 else "NULO"
-                routed.setdefault((source_uf, target_uf), []).append(value)
+                routed.setdefault((source_uf, target_uf), set()).add(value)
         finally:
             connection.close()
 
     summary = []
-    for (source_uf, target_uf), identifiers in sorted(routed.items()):
+    for (source_uf, target_uf), distinct_identifiers in sorted(routed.items()):
+        identifiers = sorted(distinct_identifiers)
         found = 0
         if target_uf in UFS:
             target_path = root / "car" / target_uf / f"{target_uf}_AREA_IMOVEL.gpkg"
@@ -65,7 +66,8 @@ def audit(data_root: Path) -> dict[str, object]:
                     marks = ",".join("?" for _ in values)
                     found += int(
                         connection.execute(
-                            f"SELECT COUNT(*) FROM {table} WHERE {field} IN ({marks})",
+                            f"SELECT COUNT(DISTINCT {field}) FROM {table} "
+                            f"WHERE {field} IN ({marks})",
                             values,
                         ).fetchone()[0]
                     )
