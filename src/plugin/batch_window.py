@@ -42,10 +42,11 @@ from qgis_plugin_microcredito.domain.policy import (
     evaluate_lists,
     unique_operation,
 )
+from qgis_plugin_microcredito.domain.fiscal_modules import assess_car_fiscal_modules
 
 from .analysis import default_sources
 from .batch import BatchRow, read_batch_xlsx
-from .car_source import export_car_feature, normalize_car
+from .car_source import car_feature_context, export_car_feature, normalize_car
 from .evidence import (
     collect_database_evidence,
     file_evidence,
@@ -539,6 +540,9 @@ class BatchWindow(QDialog):
         resource_source, source_mode, source_state = resolve_resource_source(
             row.resource_source, car
         )
+        fiscal_module = assess_car_fiscal_modules(
+            car, car_feature_context(car_base, car), mma
+        )
         analysis = {
             "resultado_geral": overall,
             "resultado_fontes": source_results,
@@ -564,6 +568,7 @@ class BatchWindow(QDialog):
             "fonte_recursos_modo": source_mode,
             "fonte_recursos_uf": source_state,
             "programa_financiamento": row.credit_line,
+            "modulo_fiscal": fiscal_module,
             **database_evidence,
             "planilha_sha256": self.spreadsheet_sha256,
             "documento_lote": row.document,

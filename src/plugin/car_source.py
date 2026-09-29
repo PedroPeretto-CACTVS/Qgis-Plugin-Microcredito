@@ -114,6 +114,7 @@ def coordinates_from_google_maps_url(value: str) -> tuple[float, float]:
 
 
 from qgis_plugin_microcredito.domain.normalize import normalize_car
+from qgis_plugin_microcredito.domain.fiscal_modules import municipality_code_from_car
 
 
 def formatted_car(value: str) -> str:
@@ -213,6 +214,28 @@ def find_car_feature(directory: str | Path, car: str):
             if normalize_car(feature[field]) == wanted and feature.hasGeometry():
                 return layer, feature, path, field
     return None
+
+
+def car_feature_context(directory: str | Path, car: str) -> dict[str, object]:
+    """Return the SICAR attributes required by non-spatial business rules."""
+    found = find_car_feature(directory, car)
+    if not found:
+        return {}
+    layer, feature, _, _ = found
+    fields = {field.name().lower(): field.name() for field in layer.fields()}
+
+    def value(*candidates: str) -> object:
+        field = next((fields[name] for name in candidates if name in fields), None)
+        return feature[field] if field else None
+
+    car_value = value(*CAR_FIELDS) or car
+    return {
+        "area_ha": value("num_area", "area", "area_ha"),
+        "modulos_fiscais": value("mod_fiscal", "modulos_fiscais"),
+        "status": value("ind_status", "status", "status_imo"),
+        "municipio": value("municipio", "nom_munici"),
+        "codigo_municipio": municipality_code_from_car(car_value),
+    }
 
 
 def export_car_feature(

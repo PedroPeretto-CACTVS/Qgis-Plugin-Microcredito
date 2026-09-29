@@ -54,6 +54,7 @@ from qgis_plugin_microcredito.domain.policy import (
     list_message,
     unique_operation,
 )
+from qgis_plugin_microcredito.domain.fiscal_modules import assess_car_fiscal_modules
 from qgis_plugin_microcredito.application.pre_analysis import (
     PRE_ANALYSIS_LABELS,
     TECHNICAL_DECISIONS,
@@ -73,6 +74,7 @@ from qgis_plugin_microcredito.domain.financing import (
 from .analysis import default_sources
 from .car_source import (
     add_google_satellite,
+    car_feature_context,
     coordinates_from_google_maps_url,
     export_car_feature,
     find_car_feature,
@@ -1056,22 +1058,7 @@ class SearchWindow(QDialog):
                 directory = str(automatic)
         if not directory or not self.car.text().strip():
             return {}
-        found = find_car_feature(directory, self.car.text())
-        if not found:
-            return {}
-        layer, feature, _, _ = found
-        fields = {field.name().lower(): field.name() for field in layer.fields()}
-
-        def value(*candidates):
-            field = next((fields[name] for name in candidates if name in fields), None)
-            return feature[field] if field else None
-
-        return {
-            "area_ha": value("num_area", "area", "area_ha"),
-            "modulos_fiscais": value("mod_fiscal", "modulos_fiscais"),
-            "status": value("ind_status", "status", "status_imo"),
-            "municipio": value("municipio", "nom_munici"),
-        }
+        return car_feature_context(directory, self.car.text())
 
     def _fill_table(self):
         self.table.setSortingEnabled(False)
@@ -1722,6 +1709,9 @@ class SearchWindow(QDialog):
             source_results = evaluate_lists(
                 mma, slave_labor, database_evidence, associated_documents
             )
+            fiscal_module = assess_car_fiscal_modules(
+                self.car.text(), self._local_car_context(), mma
+            )
             overall = aggregate(
                 [environmental["resultado_geral"], *source_results.values()]
             )
@@ -1744,6 +1734,7 @@ class SearchWindow(QDialog):
                 "fonte_recursos_modo": resource_source_mode,
                 "fonte_recursos_uf": resource_source_state,
                 "programa_financiamento": str(self.program.currentData() or ""),
+                "modulo_fiscal": fiscal_module,
                 **database_evidence,
             }
             analysis["pre_analise"] = build_pre_analysis(analysis)

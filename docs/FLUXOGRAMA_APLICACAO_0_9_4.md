@@ -103,8 +103,13 @@ flowchart TD
     GS --> CR["Cruzar bases socioambientais locais"]
     GG --> CR
     MTE --> B["Consolidar listas e evidências do banco"]
+    GS --> MFA["Ler área, quantidade declarada de módulos\ne código IBGE do CAR"]
+    MMA --> MFA
+    MFA --> MFT["Consultar módulo fiscal municipal\nna tabela oficial INCRA com 5.571 códigos IBGE"]
+    MFT --> MFC["Calcular área ÷ módulo e comparar com 4\nsem concluir agricultura familiar automaticamente"]
+    MFC --> B
     CR --> B
-    B --> EVI["MMA/MCR + MTE + embargos + TI + quilombolas\n+ UC + florestas públicas tipo B + PRODES"]
+    B --> EVI["MMA/MCR + MTE + módulo fiscal + embargos + TI + quilombolas\n+ UC + florestas públicas tipo B + PRODES"]
     EVI --> PA["Gerar classificação preliminar por regra\ne hash da pré-análise"]
     PA --> OLD{"Existe decisão técnica anterior?"}
     OLD -->|"Não"| TEC{"Ação do técnico"}
@@ -130,6 +135,9 @@ Observações:
   proprietário ou possuidor para a consulta MTE;
 - a ferramenta aponta possível impedimento, ausência de indício, lacuna ou
   necessidade de validação. A contratação continua sendo decisão humana;
+- o resultado de até quatro módulos fiscais cobre somente o critério
+  territorial do CAR. A qualificação da agricultura familiar ainda exige CAF,
+  consolidação da área da UFPA, renda, mão de obra, gestão e exceções legais;
 - a decisão fica vinculada ao hash da pré-análise e é invalidada se a
   pré-análise mudar.
 

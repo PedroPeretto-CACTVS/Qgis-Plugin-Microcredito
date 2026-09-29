@@ -12,6 +12,8 @@ import json
 import unicodedata
 from collections import Counter
 
+from qgis_plugin_microcredito.domain.fiscal_modules import LEGAL_REFERENCE
+
 POSSIBLE_IMPEDIMENT = "possivel_impedimento"
 NO_INDICATION = "sem_indicio_impedimento"
 INCONCLUSIVE = "inconclusivo"
@@ -32,7 +34,7 @@ TECHNICAL_DECISIONS = (
     ("encaminhar", "Encaminhar para análise especializada"),
 )
 
-RULES_VERSION = "pre-analise-mcr-fno-fco-2026-09-22"
+RULES_VERSION = "pre-analise-mcr-fno-fco-modulo-fiscal-2026-09-29"
 
 
 def _mapping(value: object) -> dict[str, object]:
@@ -322,6 +324,39 @@ def _environment_rule(layer: dict[str, object]) -> dict[str, object]:
     )
 
 
+def _fiscal_module_rule(
+    analysis: dict[str, object],
+) -> dict[str, object] | None:
+    assessment = _mapping(analysis.get("modulo_fiscal"))
+    if not assessment:
+        return None
+    understanding = (
+        "O limite de até quatro módulos fiscais é apenas um dos requisitos "
+        "territoriais da qualificação da agricultura familiar. O módulo varia "
+        "por município; CAF, área total da UFPA, renda, mão de obra, gestão e "
+        "exceções legais continuam sujeitos à validação."
+    )
+    status = str(assessment.get("status") or "nao_verificado")
+    classification = INCONCLUSIVE if status == "nao_verificado" else TECHNICAL_REVIEW
+    reference = "; ".join(
+        value
+        for value in (
+            LEGAL_REFERENCE,
+            str(assessment.get("source_rule") or ""),
+        )
+        if value
+    )
+    return _item(
+        "modulo_fiscal_agricultura_familiar",
+        "Limite territorial da agricultura familiar",
+        classification,
+        understanding,
+        str(assessment.get("rationale") or assessment.get("status_label") or ""),
+        str(assessment.get("technical_action") or "Conferir o CAF e os documentos."),
+        reference,
+    )
+
+
 def build_pre_analysis(analysis: dict[str, object]) -> dict[str, object]:
     """Produz uma leitura explicável sem substituir a decisão do técnico."""
     outcomes = _mapping(analysis.get("resultado_fontes"))
@@ -330,6 +365,9 @@ def build_pre_analysis(analysis: dict[str, object]) -> dict[str, object]:
         _list_rule("mte", str(outcomes.get("mte") or "inconclusivo")),
         _constitutional_funds_rule(analysis),
     ]
+    fiscal_module_rule = _fiscal_module_rule(analysis)
+    if fiscal_module_rule:
+        rules.append(fiscal_module_rule)
     environmental = _mapping(analysis.get("ambiental"))
     rules.extend(
         _environment_rule(layer)

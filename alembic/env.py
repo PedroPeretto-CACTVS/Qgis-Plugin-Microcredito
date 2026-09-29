@@ -6,7 +6,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from database.models import Base
-from database.schema import ACTIVE_VIEW_TABLES
+from database.schema import ACTIVE_VIEW_TABLES, SCHEMA_VERSION
 
 config = context.config
 if config.config_file_name is not None:
@@ -38,7 +38,7 @@ def run_migrations_online() -> None:
                     SELECT t.* FROM {table} t JOIN importacao i ON i.id = t.importacao_id
                     WHERE i.ativo = 1"""
                 )
-            connection.exec_driver_sql("PRAGMA user_version = 3")
+            connection.exec_driver_sql(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 if context.is_offline_mode():

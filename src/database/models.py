@@ -1,4 +1,4 @@
-"""SQLAlchemy 2.x models matching schema v3 table and column names."""
+"""SQLAlchemy 2.x models matching schema v4 table and column names."""
 
 from __future__ import annotations
 
@@ -263,3 +263,21 @@ class MtePublicacao(Base):
     )
     total_registros: Mapped[int] = mapped_column(Integer, nullable=False)
     validade_ate: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class IncraModuloFiscal(Base):
+    __tablename__ = "incra_modulo_fiscal"
+    __table_args__ = (
+        CheckConstraint(
+            "length(codigo_municipio) = 7", name="ck_modulo_fiscal_codigo_ibge"
+        ),
+        CheckConstraint(
+            "modulo_fiscal_ha > 0", name="ck_modulo_fiscal_hectares_positivo"
+        ),
+    )
+
+    codigo_municipio: Mapped[str] = mapped_column(Text, primary_key=True)
+    modulo_fiscal_ha: Mapped[int] = mapped_column(Integer, nullable=False)
+    norma_fonte: Mapped[str] = mapped_column(Text, nullable=False)
+    fonte_url: Mapped[str] = mapped_column(Text, nullable=False)
+    data_referencia: Mapped[str] = mapped_column(Text, nullable=False)

@@ -44,6 +44,7 @@ class DistributionTests(unittest.TestCase):
                     "update_window.py",
                     "lib/qgis_plugin_microcredito/domain/base_catalog.py",
                     "lib/qgis_plugin_microcredito/domain/financing.py",
+                    "lib/qgis_plugin_microcredito/domain/fiscal_modules.py",
                     "lib/qgis_plugin_microcredito/domain/models.py",
                     "lib/qgis_plugin_microcredito/application/pre_analysis.py",
                     "lib/qgis_plugin_microcredito/infrastructure/updates.py",

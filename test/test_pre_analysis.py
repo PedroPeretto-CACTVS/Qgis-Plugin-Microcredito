@@ -178,6 +178,32 @@ class PreAnalysisTests(unittest.TestCase):
         self.assertIn("UF PA", fund_rule["fundamento_resultado"])
         self.assertIn("confirmada pelo técnico", fund_rule["fundamento_resultado"])
 
+    def test_fiscal_module_rule_never_declares_family_farmer_automatically(self):
+        analysis = analysis_with(
+            {
+                "codigo": "embargos",
+                "resultado": "sem_ocorrencia_identificada",
+                "ocorrencias": [],
+            }
+        )
+        analysis["modulo_fiscal"] = {
+            "status": "atende_limite",
+            "rationale": "O CAR corresponde a 2 módulos fiscais.",
+            "technical_action": "Validar CAF e os demais requisitos.",
+            "source_rule": "IE INCRA nº 6/2025",
+        }
+
+        result = build_pre_analysis(analysis)
+
+        rule = next(
+            item
+            for item in result["regras"]
+            if item["codigo"] == "modulo_fiscal_agricultura_familiar"
+        )
+        self.assertEqual(rule["classificacao"], TECHNICAL_REVIEW)
+        self.assertIn("apenas um dos requisitos", rule["entendimento_regra"])
+        self.assertIn("CAF", rule["providencia_tecnica"])
+
 
 if __name__ == "__main__":
     unittest.main()

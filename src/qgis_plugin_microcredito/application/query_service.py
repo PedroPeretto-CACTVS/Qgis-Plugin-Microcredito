@@ -13,6 +13,7 @@ from database.repositories import (
 from database.repositories import (
     find_documents_by_car as _find_documents_by_car,
 )
+from database.repositories import find_fiscal_module as _find_fiscal_module
 from database.repositories import (
     find_mma_mcr_by_car as _find_mma_mcr_by_car,
 )
@@ -57,6 +58,12 @@ def find_mma_mcr_by_car(
     connection: sqlite3.Connection, car: str
 ) -> list[dict[str, Any]]:
     return _find_mma_mcr_by_car(connection, car)
+
+
+def find_fiscal_module(
+    connection: sqlite3.Connection, municipality_code: str
+) -> dict[str, Any]:
+    return _find_fiscal_module(connection, municipality_code)
 
 
 def list_imports(connection: sqlite3.Connection) -> list[dict[str, Any]]:
