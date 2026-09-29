@@ -20,12 +20,7 @@ def validate_zip(path: str | Path) -> bool:
     return True
 
 
-def validate_geopackage(
-    path: str | Path,
-    uf: str | None = None,
-    *,
-    expected_foreign_features: int = 0,
-) -> bool:
+def _inspect_geopackage(path: str | Path, uf: str | None = None) -> int:
     connection = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
     try:
         if list(connection.execute("PRAGMA quick_check")) != [("ok",)]:
@@ -43,6 +38,7 @@ def validate_geopackage(
         table = '"' + tables[0][0].replace('"', '""') + '"'
         if connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is None:
             raise ValueError("Camada vetorial vazia.")
+        mismatch_count = 0
         if uf:
             if uf not in UFS:
                 raise ValueError("UF desconhecida.")
@@ -75,16 +71,30 @@ def validate_geopackage(
                     (uf,),
                 ).fetchone()[0]
             )
-            if mismatch_count != expected_foreign_features:
-                raise ValueError(
-                    "A quantidade de CAR sem identificação ou de UF diferente "
-                    "diverge da exceção assinada: "
-                    f"foram encontrados {mismatch_count}, mas o catálogo declarou "
-                    f"{expected_foreign_features}."
-                )
-        return True
+        return mismatch_count
     finally:
         connection.close()
+
+
+def geopackage_foreign_feature_count(path: str | Path, uf: str) -> int:
+    return _inspect_geopackage(path, uf)
+
+
+def validate_geopackage(
+    path: str | Path,
+    uf: str | None = None,
+    *,
+    expected_foreign_features: int = 0,
+) -> bool:
+    mismatch_count = _inspect_geopackage(path, uf)
+    if uf and mismatch_count != expected_foreign_features:
+        raise ValueError(
+            "A quantidade de CAR sem identificação ou de UF diferente "
+            "diverge da exceção assinada: "
+            f"foram encontrados {mismatch_count}, mas o catálogo declarou "
+            f"{expected_foreign_features}."
+        )
+    return True
 
 
 def reconcile_features(
