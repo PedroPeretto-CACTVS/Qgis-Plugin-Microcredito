@@ -14,11 +14,12 @@ def connect(path: str | Path, *, readonly: bool = False) -> sqlite3.Connection:
         connection = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA query_only = ON")
-        if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if version != SCHEMA_VERSION:
             connection.close()
             raise ValueError(
-                "Banco incompatível com a versão 0.8. Faça a migração administrativa "
-                "em uma cópia antes de consultar."
+                f"Banco incompatível: esquema {version}; esperado {SCHEMA_VERSION}. "
+                "Faça a migração administrativa em uma cópia antes de consultar."
             )
         return connection
     db_path.parent.mkdir(parents=True, exist_ok=True)

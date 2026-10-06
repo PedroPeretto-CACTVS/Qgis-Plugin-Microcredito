@@ -8,6 +8,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from database.schema import SCHEMA_VERSION
 from installer.constants import ENVIRONMENTAL, PLUGIN_VERSION, UFS, repository_root
 from installer.plugin_build import plugin_files
 from qgis_plugin_microcredito.infrastructure.downloads import UFS as DOWNLOAD_UFS
@@ -73,9 +74,10 @@ def validate_sources(data: Path) -> None:
     connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
     try:
         schema = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if schema != 3:
+        if schema != SCHEMA_VERSION:
             raise ValueError(
-                f"Banco incompatível: esquema {schema}; esperado 3 para a versão {PLUGIN_VERSION}."
+                f"Banco incompatível: esquema {schema}; esperado {SCHEMA_VERSION} "
+                f"para a versão {PLUGIN_VERSION}."
             )
     finally:
         connection.close()
