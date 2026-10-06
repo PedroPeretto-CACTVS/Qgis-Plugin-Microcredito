@@ -124,6 +124,11 @@ def build_update_package(
             raise ValueError(
                 "Cada arquivo de geometria Sicor exige --payload-scope próprio."
             )
+        gleba_scopes = [
+            payload_scopes[name] for name in glebas if name in payload_scopes
+        ]
+        if len(set(gleba_scopes)) != len(gleba_scopes):
+            raise ValueError("Arquivos de geometria Sicor exigem escopos distintos.")
     elif payload_scopes:
         raise ValueError("Somente import_sicor aceita escopos por payload.")
     payload_members: dict[str, str] = {}
