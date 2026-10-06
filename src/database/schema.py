@@ -1,4 +1,4 @@
-"""Schema v3 bootstrap, v2 import table migration, and import activation."""
+"""Schema v4 bootstrap, legacy migrations, and import activation."""
 
 from __future__ import annotations
 

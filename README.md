@@ -1,6 +1,6 @@
 # CAR Microcrédito
 
-**Versão 0.9.5** — triagem socioambiental de operações de microcrédito rural com apoio do QGIS.
+**Versão 0.9.6** — triagem socioambiental de operações de microcrédito rural com apoio do QGIS.
 
 O plugin automatiza a consulta de dados públicos (Sicor, MMA/MCR, MTE), o cruzamento espacial do CAR com camadas ambientais nacionais, a pré-análise explicável e a atualização assinada das bases. Cada análise produz **evidências para revisão humana** (PDF, JSON, mapa e metadados das fontes). **Não substitui a decisão de crédito** nem declara conformidade integral com o MCR.
 
@@ -99,7 +99,7 @@ src/
 │   ├── domain/                 # Dataclasses, enums e regras puras (policy)
 │   ├── application/            # Serviços: importação, consulta, geo, backup
 │   └── infrastructure/         # Leitura de CSV, validação de downloads
-├── database/                   # SQLAlchemy, schema v3, repositórios, migrações
+├── database/                   # SQLite, schema v4, repositórios e migrações
 ├── cli/                        # CLI `car-microcredito`
 ├── plugin/                     # Superfície QGIS (UI, análise espacial, relatório)
 └── installer/                  # verify, install, plugin-build, package-build, update-package

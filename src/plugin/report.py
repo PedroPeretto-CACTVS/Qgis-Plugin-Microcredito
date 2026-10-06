@@ -403,7 +403,7 @@ def _report_payload(analysis: dict[str, object]) -> dict[str, object]:
         ]
     )
     payload["pre_analise"] = build_pre_analysis(payload)
-    payload["versao_motor"] = "0.9.5"
+    payload["versao_motor"] = "0.9.6"
     payload["versao_regras"] = payload["pre_analise"]["versao_regras"]
     recorded_decision = payload.get("decisao_tecnica") or {}
     if (

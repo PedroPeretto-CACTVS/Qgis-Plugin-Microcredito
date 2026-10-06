@@ -13,7 +13,7 @@ try:
     from qgis_plugin_microcredito.domain.normalize import format_document
 except ImportError:
     # O QGIS pode manter o módulo da versão anterior em memória após instalar
-    # um ZIP novo. Esta ponte permite abrir a 0.9.5 antes mesmo de reiniciá-lo.
+    # um ZIP novo. Esta ponte permite abrir a 0.9.6 antes mesmo de reiniciá-lo.
     def format_document(value: object) -> str:
         digits = normalize_document(value)
         if len(digits) == 11:
