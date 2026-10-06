@@ -157,7 +157,7 @@ flowchart TD
     EX --> NC{"Algum CAR válido?"}
     NC -->|"Não"| FL["Registrar falha da linha\ne seguir com as demais"]
     NC -->|"Sim"| T
-    T --> DD["Remover pares CPF/CNPJ + CAR duplicados"]
+    T --> DD["Remover tarefas CPF/CNPJ + CAR + FONTE_RECURSOS + LINHA_CREDITO duplicadas"]
     DD --> LOOP["Processar cada tarefa sem interromper as demais por uma falha"]
     LOOP --> GEO["Polígono SICAR; se ausente, gleba Sicor única"]
     GEO --> GEOK{"Geometria confiável encontrada?"}
