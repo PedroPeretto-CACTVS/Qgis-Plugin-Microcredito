@@ -127,7 +127,8 @@ def inventory(data_root: Path, mte_source: Path | None = None) -> dict[str, obje
     else:
         resolved = mte_source.resolve()
         mte_entry = {
-            "path": str(resolved),
+            "path": resolved.name,
+            "path_included": False,
             "present": resolved.is_file(),
             "size_bytes": resolved.stat().st_size if resolved.is_file() else None,
             "fits_github_release": resolved.is_file()
