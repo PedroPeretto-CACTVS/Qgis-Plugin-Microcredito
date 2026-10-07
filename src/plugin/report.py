@@ -413,7 +413,8 @@ def _report_payload(analysis: dict[str, object]) -> dict[str, object]:
     ):
         payload["decisao_tecnica_anterior_invalidada"] = {
             "motivo": (
-                "Os resultados ou a versão das regras mudaram após a decisão; "
+                "Os resultados, as regras ou as evidências consultadas mudaram "
+                "após a decisão; "
                 "é necessária nova decisão técnica."
             ),
             "registrada_em": recorded_decision.get("registrada_em"),
