@@ -120,6 +120,7 @@ class CatalogPackage:
     source_date: str | None = None
     source_reference: str | None = None
     foreign_feature_count: int = 0
+    catalog_issued_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -454,6 +455,7 @@ def _parse_catalog(payload: bytes) -> Catalog:
                 source_date,
                 source_reference,
                 foreign_feature_count,
+                issued_at.isoformat(),
             )
         )
     return Catalog(
@@ -712,7 +714,7 @@ def _registry_path(data_root: Path) -> Path:
     return data_root / UPDATE_DIRECTORY / "estado.json"
 
 
-def _load_registry(data_root: Path) -> dict[str, dict[str, str]]:
+def _read_registry_document(data_root: Path) -> dict[str, object]:
     path = _registry_path(data_root)
     if not path.is_file():
         return {}
@@ -720,6 +722,11 @@ def _load_registry(data_root: Path) -> dict[str, dict[str, str]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _load_registry(data_root: Path) -> dict[str, dict[str, str]]:
+    payload = _read_registry_document(data_root)
     packages = payload.get("packages") if isinstance(payload, dict) else None
     if not isinstance(packages, dict):
         return {}
@@ -732,11 +739,48 @@ def _load_registry(data_root: Path) -> dict[str, dict[str, str]]:
     }
 
 
-def _write_registry(data_root: Path, packages: dict[str, dict[str, str]]) -> None:
+def _registry_catalog_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return _parse_timestamp(value, "catalog_issued_at")
+    except UpdateError:
+        return None
+
+
+def _latest_catalog_timestamp(data_root: Path) -> datetime | None:
+    document = _read_registry_document(data_root)
+    candidates = [_registry_catalog_timestamp(document.get("latest_catalog_issued_at"))]
+    packages = document.get("packages")
+    if isinstance(packages, dict):
+        candidates.extend(
+            _registry_catalog_timestamp(entry.get("catalog_issued_at"))
+            for entry in packages.values()
+            if isinstance(entry, dict)
+        )
+    valid = [candidate for candidate in candidates if candidate is not None]
+    return max(valid) if valid else None
+
+
+def _write_registry(
+    data_root: Path,
+    packages: dict[str, dict[str, str]],
+    catalog_issued_at: str | None = None,
+) -> None:
     target = _registry_path(data_root)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(".json.tmp")
-    payload = {"schema_version": 1, "packages": packages}
+    timestamps = [
+        timestamp
+        for timestamp in (
+            _latest_catalog_timestamp(data_root),
+            _registry_catalog_timestamp(catalog_issued_at),
+        )
+        if timestamp is not None
+    ]
+    payload: dict[str, object] = {"schema_version": 2, "packages": packages}
+    if timestamps:
+        payload["latest_catalog_issued_at"] = max(timestamps).isoformat()
     temporary.write_text(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2),
         encoding="utf-8",
@@ -1011,11 +1055,21 @@ def _installed_package_version(
 def compare_catalog(
     catalog: Catalog, data_root: str | Path, database: str | Path
 ) -> list[UpdateStatus]:
-    installed = local_versions(data_root, database)
+    root = Path(data_root).resolve()
+    installed = local_versions(root, database)
+    latest_catalog = _latest_catalog_timestamp(root)
+    catalog_timestamp = _parse_timestamp(catalog.issued_at, "issued_at")
+    older_catalog = latest_catalog is not None and catalog_timestamp < latest_catalog
     status = []
     for package in catalog.packages:
         current = _installed_package_version(package, installed)
-        if current == package.version:
+        if older_catalog:
+            state, detail = (
+                "inaplicavel",
+                "Catálogo assinado anterior ao catálogo mais recente já instalado; "
+                "a regressão foi bloqueada.",
+            )
+        elif current == package.version:
             state, detail = "atual", "A versão publicada já está instalada."
         elif current:
             state, detail = "disponivel", "Há uma versão nova validada pelo publicador."
@@ -1292,14 +1346,21 @@ class LocalUpdater:
         registry = _load_registry(self.data_root)
         installed_at = datetime.now(UTC).isoformat()
         for identifier in _provided_identifiers(package):
-            registry[identifier] = {
+            entry = {
                 "version": package.version,
                 "sha256": package.sha256,
                 "installed_at": installed_at,
                 "package_id": package.identifier,
                 "source_date": package.source_date or "",
             }
-        _write_registry(self.data_root, registry)
+            if package.catalog_issued_at is not None:
+                entry["catalog_issued_at"] = package.catalog_issued_at
+            registry[identifier] = entry
+        _write_registry(
+            self.data_root,
+            registry,
+            catalog_issued_at=package.catalog_issued_at,
+        )
 
     def _replace_file(
         self,
@@ -1516,6 +1577,17 @@ class LocalUpdater:
         # bancos SQLite dentro de pastas de usuário com caminhos extensos.
         staging = self.data_root / STAGING_DIRECTORY / uuid.uuid4().hex[:12]
         try:
+            latest_catalog = _latest_catalog_timestamp(self.data_root)
+            package_catalog = _registry_catalog_timestamp(package.catalog_issued_at)
+            if (
+                latest_catalog is not None
+                and package_catalog is not None
+                and package_catalog < latest_catalog
+            ):
+                raise UpdateError(
+                    "O pacote pertence a um catálogo assinado anterior ao catálogo "
+                    "mais recente já instalado. A regressão foi bloqueada."
+                )
             registry_snapshot = _load_registry(self.data_root)
             restore_version = _installed_package_version(
                 package, local_versions(self.data_root, self.database)

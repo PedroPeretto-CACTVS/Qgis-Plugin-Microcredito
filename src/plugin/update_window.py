@@ -465,13 +465,18 @@ class UpdateWindow(QDialog):
             self.table.insertRow(row)
             if status.state == "disponivel" and first_available_row is None:
                 first_available_row = row
+            local_state = {
+                "atual": "Atualizada",
+                "disponivel": "Disponível",
+                "inaplicavel": "Não aplicável",
+            }.get(status.state, status.state)
             values = (
                 status.label,
                 status.regulatory_basis,
                 status.installed_version or "Não identificada",
                 status.source_date,
                 status.available_version,
-                "Atualizada" if status.state == "atual" else "Disponível",
+                local_state,
                 status.coverage,
                 status.detail,
             )
@@ -483,6 +488,7 @@ class UpdateWindow(QDialog):
         if statuses:
             self.table.selectRow(first_available_row if first_available_row is not None else 0)
         available = sum(status.state == "disponivel" for status in statuses)
+        blocked = sum(status.state == "inaplicavel" for status in statuses)
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setFormat("Catálogo validado")
@@ -490,6 +496,11 @@ class UpdateWindow(QDialog):
             noun = "atualização disponível" if available == 1 else "atualizações disponíveis"
             channel = "produção" if getattr(catalog, "channel", "homologacao") == "producao" else "homologação"
             message = f"Catálogo assinado de {channel} válido. {available} {noun}."
+        elif blocked:
+            message = (
+                "Catálogo assinado anterior ao estado local mais recente. "
+                "Nenhum pacote regressivo pode ser aplicado."
+            )
         else:
             message = (
                 "Catálogo assinado e válido. Nenhuma atualização disponível: "
