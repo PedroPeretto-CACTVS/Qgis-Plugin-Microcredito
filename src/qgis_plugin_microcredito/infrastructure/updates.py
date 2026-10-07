@@ -1609,6 +1609,24 @@ def _check_database(path: Path) -> None:
         )
 
 
+def _migrate_database_copy(path: Path) -> None:
+    connection = None
+    try:
+        connection = sqlite3.connect(path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode = DELETE")
+        connection.execute("PRAGMA foreign_keys = ON")
+        initialize(connection)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise UpdateError(
+            "A cópia de restauração não pôde ser migrada para o esquema atual. "
+            "O banco ativo foi preservado."
+        ) from exc
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 class LocalRestorer:
     """Restaura somente o ponto mais recente e cria antes um ponto de desfazer."""
 
@@ -1705,7 +1723,9 @@ class LocalRestorer:
                 f"Preparando versão anterior: {copied:,} de {total:,} páginas…",
             ),
         )
-        self._emit_progress(38, "Verificando a integridade da versão anterior…")
+        self._emit_progress(38, "Atualizando o esquema da versão anterior…")
+        _migrate_database_copy(staged_database)
+        self._emit_progress(46, "Verificando a integridade da versão anterior…")
         _check_database(staged_database)
 
         current_registry = _load_registry(self.data_root)

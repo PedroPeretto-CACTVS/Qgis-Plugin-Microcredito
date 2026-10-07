@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from database.schema import initialize
+from database.schema import SCHEMA_VERSION, initialize
 from database.session import connect
 from qgis_plugin_microcredito.infrastructure.downloads import validate_geopackage
 from qgis_plugin_microcredito.infrastructure.updates import (
@@ -662,6 +662,53 @@ class UpdateTests(unittest.TestCase):
             (self.root / ".atualizacoes" / "estado.json").read_text(encoding="utf-8")
         )
         self.assertEqual(registry["packages"]["mte"]["version"], "2026.09.21")
+
+    def test_restore_migrates_older_database_before_promotion(self):
+        csv = (
+            "ID;Ano da acao fiscal;UF;Empregador;CNPJ/CPF;Estabelecimento;Trabalhadores envolvidos;CNAE;"
+            "Decisao administrativa de procedencia;Inclusao no Cadastro de Empregadores\n"
+            "1;2026;MT;Empresa Teste;12.345.678/0001-90;Endereco;2;0111-2/01;2026-01-01;2026-02-01\n"
+        ).encode("cp1252")
+        archive = _package(
+            {
+                "id": "mte",
+                "version": "2026.09.21",
+                "strategy": "import_mte",
+                "payloads": {"file": "payload/mte.csv"},
+            },
+            {"payload/mte.csv": csv},
+        )
+        package = self._package_descriptor(
+            "mte", "import_mte", archive, validity_until="2030-01-01"
+        )
+        LocalUpdater(
+            self.root, self.database, self._client({package.url: archive})
+        ).apply(package)
+        point = latest_restore_point(self.root, self.database)
+        backup = self.root / ".h" / Path(point.restore_id) / self.database.name
+        connection = sqlite3.connect(backup)
+        try:
+            connection.execute("DROP TABLE incra_modulo_fiscal")
+            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION - 1}")
+            connection.commit()
+        finally:
+            connection.close()
+
+        restore_latest(self.root, self.database)
+
+        connection = connect(self.database, readonly=True)
+        try:
+            self.assertEqual(
+                connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
+            )
+            self.assertGreater(
+                connection.execute(
+                    "SELECT COUNT(*) FROM incra_modulo_fiscal"
+                ).fetchone()[0],
+                0,
+            )
+        finally:
+            connection.close()
 
     def test_legacy_090_database_backup_is_discovered_and_restored(self):
         csv = (
