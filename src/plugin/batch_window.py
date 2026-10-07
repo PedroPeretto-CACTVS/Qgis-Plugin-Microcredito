@@ -37,15 +37,15 @@ from qgis_plugin_microcredito.domain.financing import (
     AUTOMATIC_RESOURCE_SOURCE,
     resolve_resource_source,
 )
+from qgis_plugin_microcredito.domain.fiscal_modules import assess_car_fiscal_modules
 from qgis_plugin_microcredito.domain.policy import (
     aggregate,
     evaluate_lists,
     unique_operation,
 )
-from qgis_plugin_microcredito.domain.fiscal_modules import assess_car_fiscal_modules
 
 from .analysis import default_sources
-from .batch import BatchRow, read_batch_xlsx
+from .batch import BatchRow, batch_task_identity, read_batch_xlsx
 from .car_source import car_feature_context, export_car_feature, normalize_car
 from .evidence import (
     collect_database_evidence,
@@ -435,7 +435,7 @@ class BatchWindow(QDialog):
                 )
                 continue
             for normalized, car in unique.items():
-                key = (row.document, normalized)
+                key = batch_task_identity(row, normalized)
                 if key in seen:
                     failures.append(
                         {

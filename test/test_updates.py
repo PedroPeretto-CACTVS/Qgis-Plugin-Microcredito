@@ -14,21 +14,27 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from database.schema import initialize
+from database.schema import SCHEMA_VERSION, initialize
 from database.session import connect
 from qgis_plugin_microcredito.infrastructure.downloads import validate_geopackage
 from qgis_plugin_microcredito.infrastructure.updates import (
     TEST_PUBLISHER_PUBLIC_KEY_PEM,
+    Catalog,
     CatalogClient,
     CatalogPackage,
     LocalUpdater,
     UpdateError,
+    _acquire_update_lock,
     _companion_signature_url,
     _parse_catalog,
+    _release_update_lock,
     _SecureHttpsRedirectHandler,
+    compare_catalog,
+    ensure_not_updating,
     latest_restore_point,
     local_inventory,
     restore_latest,
+    update_lock_path,
     verify_catalog_signature,
 )
 
@@ -112,6 +118,27 @@ class UpdateTests(unittest.TestCase):
         finally:
             connection.close()
         return path
+    def _replace_file_catalog(
+        self, issued_at: str, version: str, archive: bytes
+    ) -> Catalog:
+        document = {
+            "schema_version": 1,
+            "issued_at": issued_at,
+            "expires_at": "2027-09-01T00:00:00Z",
+            "packages": [
+                {
+                    "id": "fonte_teste",
+                    "label": "Fonte teste",
+                    "version": version,
+                    "strategy": "replace_file",
+                    "url": "https://publisher.example/fonte-teste.zip",
+                    "sha256": hashlib.sha256(archive).hexdigest(),
+                    "size_bytes": len(archive),
+                    "target": "normativos/fonte.txt",
+                }
+            ],
+        }
+        return _parse_catalog(json.dumps(document).encode())
 
     def test_catalog_signature_is_verified_and_tampering_is_rejected(self):
         payload = b'{"schema_version":1}'
@@ -120,6 +147,26 @@ class UpdateTests(unittest.TestCase):
             verify_catalog_signature(
                 payload + b" ", TEST_SIGNATURE, TEST_PUBLISHER_PUBLIC_KEY_PEM
             )
+
+    def test_stale_update_lock_file_does_not_block_operations(self):
+        lock_path = update_lock_path(self.root)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text("2026-01-01T00:00:00+00:00", encoding="utf-8")
+
+        ensure_not_updating(self.root)
+
+    def test_update_lock_blocks_only_while_held_by_a_process(self):
+        lock = _acquire_update_lock(self.root)
+        try:
+            with self.assertRaisesRegex(UpdateError, "andamento"):
+                ensure_not_updating(self.root)
+            with self.assertRaisesRegex(UpdateError, "andamento"):
+                _acquire_update_lock(self.root)
+        finally:
+            _release_update_lock(lock)
+
+        self.assertTrue(update_lock_path(self.root).exists())
+        ensure_not_updating(self.root)
 
     def test_inventory_uses_regulatory_names_instead_of_raw_table_names(self):
         inventory = local_inventory(self.root, self.database)
@@ -216,6 +263,88 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(len(catalog.packages), 1)
         self.assertEqual(catalog.packages[0].identifier, "mte")
         self.assertEqual(catalog.packages[0].validity_until, "2027-01-01")
+
+    def test_older_catalog_is_not_offered_or_applied(self):
+        target = self.root / "normativos" / "fonte.txt"
+        target.parent.mkdir()
+        target.write_text("versao atual", encoding="utf-8")
+        archive = _package(
+            {
+                "id": "fonte_teste",
+                "version": "2026.08.01",
+                "strategy": "replace_file",
+                "target": "normativos/fonte.txt",
+                "payloads": {"file": "payload/fonte.txt"},
+            },
+            {"payload/fonte.txt": b"versao antiga"},
+        )
+        catalog = self._replace_file_catalog(
+            "2026-09-01T00:00:00Z", "2026.08.01", archive
+        )
+        registry = self.root / ".atualizacoes" / "estado.json"
+        registry.parent.mkdir()
+        registry.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "latest_catalog_issued_at": "2026-09-20T00:00:00+00:00",
+                    "packages": {
+                        "fonte_teste": {
+                            "version": "2026.09.20",
+                            "catalog_issued_at": "2026-09-20T00:00:00+00:00",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        status = compare_catalog(catalog, self.root, self.database)[0]
+
+        self.assertEqual(status.state, "inaplicavel")
+        self.assertIn("anterior", status.detail)
+        with self.assertRaisesRegex(UpdateError, "anterior"):
+            LocalUpdater(
+                self.root,
+                self.database,
+                self._client({catalog.packages[0].url: archive}),
+            ).apply(catalog.packages[0])
+        self.assertEqual(target.read_text(encoding="utf-8"), "versao atual")
+
+    def test_install_records_catalog_date_without_rolling_it_back_on_restore(self):
+        target = self.root / "normativos" / "fonte.txt"
+        target.parent.mkdir()
+        target.write_text("versao anterior", encoding="utf-8")
+        archive = _package(
+            {
+                "id": "fonte_teste",
+                "version": "2026.09.20",
+                "strategy": "replace_file",
+                "target": "normativos/fonte.txt",
+                "payloads": {"file": "payload/fonte.txt"},
+            },
+            {"payload/fonte.txt": b"versao nova"},
+        )
+        catalog = self._replace_file_catalog(
+            "2026-09-20T00:00:00Z", "2026.09.20", archive
+        )
+        LocalUpdater(
+            self.root,
+            self.database,
+            self._client({catalog.packages[0].url: archive}),
+        ).apply(catalog.packages[0])
+
+        registry_path = self.root / ".atualizacoes" / "estado.json"
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        expected = "2026-09-20T00:00:00+00:00"
+        self.assertEqual(registry["latest_catalog_issued_at"], expected)
+        self.assertEqual(
+            registry["packages"]["fonte_teste"]["catalog_issued_at"], expected
+        )
+
+        restore_latest(self.root, self.database)
+        restored_registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        self.assertEqual(restored_registry["latest_catalog_issued_at"], expected)
 
     def test_schema_two_requires_traceable_source_and_maps_known_target(self):
         document = {
@@ -635,6 +764,53 @@ class UpdateTests(unittest.TestCase):
             (self.root / ".atualizacoes" / "estado.json").read_text(encoding="utf-8")
         )
         self.assertEqual(registry["packages"]["mte"]["version"], "2026.09.21")
+
+    def test_restore_migrates_older_database_before_promotion(self):
+        csv = (
+            "ID;Ano da acao fiscal;UF;Empregador;CNPJ/CPF;Estabelecimento;Trabalhadores envolvidos;CNAE;"
+            "Decisao administrativa de procedencia;Inclusao no Cadastro de Empregadores\n"
+            "1;2026;MT;Empresa Teste;12.345.678/0001-90;Endereco;2;0111-2/01;2026-01-01;2026-02-01\n"
+        ).encode("cp1252")
+        archive = _package(
+            {
+                "id": "mte",
+                "version": "2026.09.21",
+                "strategy": "import_mte",
+                "payloads": {"file": "payload/mte.csv"},
+            },
+            {"payload/mte.csv": csv},
+        )
+        package = self._package_descriptor(
+            "mte", "import_mte", archive, validity_until="2030-01-01"
+        )
+        LocalUpdater(
+            self.root, self.database, self._client({package.url: archive})
+        ).apply(package)
+        point = latest_restore_point(self.root, self.database)
+        backup = self.root / ".h" / Path(point.restore_id) / self.database.name
+        connection = sqlite3.connect(backup)
+        try:
+            connection.execute("DROP TABLE incra_modulo_fiscal")
+            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION - 1}")
+            connection.commit()
+        finally:
+            connection.close()
+
+        restore_latest(self.root, self.database)
+
+        connection = connect(self.database, readonly=True)
+        try:
+            self.assertEqual(
+                connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
+            )
+            self.assertGreater(
+                connection.execute(
+                    "SELECT COUNT(*) FROM incra_modulo_fiscal"
+                ).fetchone()[0],
+                0,
+            )
+        finally:
+            connection.close()
 
     def test_legacy_090_database_backup_is_discovered_and_restored(self):
         csv = (

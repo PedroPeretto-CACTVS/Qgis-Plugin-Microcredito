@@ -8,8 +8,10 @@ assinatura e promove a nova base localmente depois de preparar uma cópia.
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import hmac
+import importlib
 import json
 import os
 import re
@@ -23,7 +25,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, BinaryIO
 
 from database.schema import initialize
 from database.session import connect
@@ -101,6 +103,10 @@ class UpdateError(ValueError):
     """Falha segura de catálogo, download, validação ou promoção."""
 
 
+class _UpdateLockBusy(UpdateError):
+    """Outro processo mantém o bloqueio exclusivo das bases."""
+
+
 @dataclass(frozen=True)
 class CatalogPackage:
     identifier: str
@@ -117,6 +123,7 @@ class CatalogPackage:
     source_date: str | None = None
     source_reference: str | None = None
     foreign_feature_count: int = 0
+    catalog_issued_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -451,6 +458,7 @@ def _parse_catalog(payload: bytes) -> Catalog:
                 source_date,
                 source_reference,
                 foreign_feature_count,
+                issued_at.isoformat(),
             )
         )
     return Catalog(
@@ -709,7 +717,7 @@ def _registry_path(data_root: Path) -> Path:
     return data_root / UPDATE_DIRECTORY / "estado.json"
 
 
-def _load_registry(data_root: Path) -> dict[str, dict[str, str]]:
+def _read_registry_document(data_root: Path) -> dict[str, object]:
     path = _registry_path(data_root)
     if not path.is_file():
         return {}
@@ -717,6 +725,11 @@ def _load_registry(data_root: Path) -> dict[str, dict[str, str]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _load_registry(data_root: Path) -> dict[str, dict[str, str]]:
+    payload = _read_registry_document(data_root)
     packages = payload.get("packages") if isinstance(payload, dict) else None
     if not isinstance(packages, dict):
         return {}
@@ -729,11 +742,48 @@ def _load_registry(data_root: Path) -> dict[str, dict[str, str]]:
     }
 
 
-def _write_registry(data_root: Path, packages: dict[str, dict[str, str]]) -> None:
+def _registry_catalog_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return _parse_timestamp(value, "catalog_issued_at")
+    except UpdateError:
+        return None
+
+
+def _latest_catalog_timestamp(data_root: Path) -> datetime | None:
+    document = _read_registry_document(data_root)
+    candidates = [_registry_catalog_timestamp(document.get("latest_catalog_issued_at"))]
+    packages = document.get("packages")
+    if isinstance(packages, dict):
+        candidates.extend(
+            _registry_catalog_timestamp(entry.get("catalog_issued_at"))
+            for entry in packages.values()
+            if isinstance(entry, dict)
+        )
+    valid = [candidate for candidate in candidates if candidate is not None]
+    return max(valid) if valid else None
+
+
+def _write_registry(
+    data_root: Path,
+    packages: dict[str, dict[str, str]],
+    catalog_issued_at: str | None = None,
+) -> None:
     target = _registry_path(data_root)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(".json.tmp")
-    payload = {"schema_version": 1, "packages": packages}
+    timestamps = [
+        timestamp
+        for timestamp in (
+            _latest_catalog_timestamp(data_root),
+            _registry_catalog_timestamp(catalog_issued_at),
+        )
+        if timestamp is not None
+    ]
+    payload: dict[str, object] = {"schema_version": 2, "packages": packages}
+    if timestamps:
+        payload["latest_catalog_issued_at"] = max(timestamps).isoformat()
     temporary.write_text(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2),
         encoding="utf-8",
@@ -1023,11 +1073,21 @@ def _installed_package_version(
 def compare_catalog(
     catalog: Catalog, data_root: str | Path, database: str | Path
 ) -> list[UpdateStatus]:
-    installed = local_versions(data_root, database)
+    root = Path(data_root).resolve()
+    installed = local_versions(root, database)
+    latest_catalog = _latest_catalog_timestamp(root)
+    catalog_timestamp = _parse_timestamp(catalog.issued_at, "issued_at")
+    older_catalog = latest_catalog is not None and catalog_timestamp < latest_catalog
     status = []
     for package in catalog.packages:
         current = _installed_package_version(package, installed)
-        if current == package.version:
+        if older_catalog:
+            state, detail = (
+                "inaplicavel",
+                "Catálogo assinado anterior ao catálogo mais recente já instalado; "
+                "a regressão foi bloqueada.",
+            )
+        elif current == package.version:
             state, detail = "atual", "A versão publicada já está instalada."
         elif current:
             state, detail = "disponivel", "Há uma versão nova validada pelo publicador."
@@ -1062,29 +1122,94 @@ def update_lock_path(data_root: str | Path) -> Path:
     return Path(data_root).resolve() / UPDATE_DIRECTORY / LOCK_FILENAME
 
 
+@dataclass
+class _UpdateLock:
+    stream: BinaryIO
+
+
+def _try_lock_stream(stream: BinaryIO) -> bool:
+    stream.seek(0, os.SEEK_END)
+    if stream.tell() == 0:
+        stream.write(b"\0")
+        stream.flush()
+    stream.seek(0)
+    try:
+        if os.name == "nt":
+            msvcrt = importlib.import_module("msvcrt")
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl = importlib.import_module("fcntl")
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if exc.errno in {errno.EACCES, errno.EAGAIN}:
+            return False
+        raise
+    return True
+
+
+def _unlock_stream(stream: BinaryIO) -> None:
+    stream.seek(0)
+    if os.name == "nt":
+        msvcrt = importlib.import_module("msvcrt")
+        msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl = importlib.import_module("fcntl")
+        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
 def ensure_not_updating(data_root: str | Path) -> None:
-    if update_lock_path(data_root).exists():
+    try:
+        lock = _acquire_update_lock(Path(data_root), record_timestamp=False)
+    except _UpdateLockBusy as exc:
         raise UpdateError(
             "Uma atualização de bases está em andamento. Aguarde a conclusão antes de consultar."
-        )
+        ) from exc
+    _release_update_lock(lock)
 
 
-def _acquire_update_lock(data_root: Path) -> Path:
+def _acquire_update_lock(
+    data_root: Path, *, record_timestamp: bool = True
+) -> _UpdateLock:
     path = update_lock_path(data_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError as exc:
+        stream = path.open("a+b")
+    except OSError as exc:
         raise UpdateError(
-            "Já existe uma atualização ou restauração em andamento. A base local foi preservada."
+            "Não foi possível acessar o bloqueio de atualização das bases."
         ) from exc
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        stream.write(datetime.now(UTC).isoformat())
-    return path
+    try:
+        acquired = _try_lock_stream(stream)
+    except OSError as exc:
+        stream.close()
+        raise UpdateError(
+            "Não foi possível acessar o bloqueio de atualização das bases."
+        ) from exc
+    if not acquired:
+        stream.close()
+        raise _UpdateLockBusy(
+            "Já existe uma atualização ou restauração em andamento. A base local foi preservada."
+        )
+    lock = _UpdateLock(stream=stream)
+    if record_timestamp:
+        try:
+            stream.seek(0)
+            stream.truncate()
+            stream.write(datetime.now(UTC).isoformat().encode("utf-8"))
+            stream.flush()
+        except OSError as exc:
+            _release_update_lock(lock)
+            raise UpdateError(
+                "Não foi possível registrar o bloqueio de atualização das bases."
+            ) from exc
+    return lock
 
 
-def _release_update_lock(path: Path) -> None:
-    path.unlink(missing_ok=True)
+def _release_update_lock(lock: _UpdateLock) -> None:
+    try:
+        _unlock_stream(lock.stream)
+    finally:
+        lock.stream.close()
 
 
 def _sicar_target_uf(path: Path) -> str | None:
@@ -1272,14 +1397,21 @@ class LocalUpdater:
         registry = _load_registry(self.data_root)
         installed_at = datetime.now(UTC).isoformat()
         for identifier in _provided_identifiers(package):
-            registry[identifier] = {
+            entry = {
                 "version": package.version,
                 "sha256": package.sha256,
                 "installed_at": installed_at,
                 "package_id": package.identifier,
                 "source_date": package.source_date or "",
             }
-        _write_registry(self.data_root, registry)
+            if package.catalog_issued_at is not None:
+                entry["catalog_issued_at"] = package.catalog_issued_at
+            registry[identifier] = entry
+        _write_registry(
+            self.data_root,
+            registry,
+            catalog_issued_at=package.catalog_issued_at,
+        )
 
     def _replace_file(
         self,
@@ -1496,6 +1628,17 @@ class LocalUpdater:
         # bancos SQLite dentro de pastas de usuário com caminhos extensos.
         staging = self.data_root / STAGING_DIRECTORY / uuid.uuid4().hex[:12]
         try:
+            latest_catalog = _latest_catalog_timestamp(self.data_root)
+            package_catalog = _registry_catalog_timestamp(package.catalog_issued_at)
+            if (
+                latest_catalog is not None
+                and package_catalog is not None
+                and package_catalog < latest_catalog
+            ):
+                raise UpdateError(
+                    "O pacote pertence a um catálogo assinado anterior ao catálogo "
+                    "mais recente já instalado. A regressão foi bloqueada."
+                )
             registry_snapshot = _load_registry(self.data_root)
             restore_version = _installed_package_version(
                 package, local_versions(self.data_root, self.database)
@@ -1586,6 +1729,24 @@ def _check_database(path: Path) -> None:
         raise UpdateError(
             "A cópia de restauração não passou na verificação de integridade."
         )
+
+
+def _migrate_database_copy(path: Path) -> None:
+    connection = None
+    try:
+        connection = sqlite3.connect(path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode = DELETE")
+        connection.execute("PRAGMA foreign_keys = ON")
+        initialize(connection)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise UpdateError(
+            "A cópia de restauração não pôde ser migrada para o esquema atual. "
+            "O banco ativo foi preservado."
+        ) from exc
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 class LocalRestorer:
@@ -1686,7 +1847,9 @@ class LocalRestorer:
                 f"Preparando versão anterior: {copied:,} de {total:,} páginas…",
             ),
         )
-        self._emit_progress(38, "Verificando a integridade da versão anterior…")
+        self._emit_progress(38, "Atualizando o esquema da versão anterior…")
+        _migrate_database_copy(staged_database)
+        self._emit_progress(46, "Verificando a integridade da versão anterior…")
         _check_database(staged_database)
 
         current_registry = _load_registry(self.data_root)

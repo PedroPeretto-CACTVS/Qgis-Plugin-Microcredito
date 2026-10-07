@@ -1,6 +1,6 @@
 # Matriz de conformidade da triagem CAR - MCR, FNO e FCO
 
-Atualização: 11/09/2026. Esta matriz descreve a cobertura da automação e deve ser revista quando o MCR ou as programações anuais forem alterados.
+Atualização: 29/09/2026. Esta matriz descreve a cobertura da automação e deve ser revista quando o MCR ou as programações anuais forem alterados.
 
 ## Resultado da conferência
 
@@ -25,7 +25,9 @@ A automação cobre a identificação da operação no Sicor, a localização do
 
 O FNO e o FCO rural usam recursos sujeitos aos impedimentos socioambientais do MCR. A origem do recurso deve ser identificada na operação do Sicor antes de escolher o checklist.
 
-Para o FCO 2026, a Programação oficial exige cumprimento da legislação ambiental durante a vigência do financiamento, recibo de inscrição no CAR conforme o MCR em condições rurais aplicáveis, descrição das imposições ambientais e envio de licenças, outorgas, Certoh ou EIA/Rima quando existentes. Também deixa garantias, fiscalização, projeto técnico, assistência técnica, forma de pagamento e aspectos de liberação para a instituição financeira. Por isso, a Programação pública não substitui o manual operacional do agente.
+Para o FCO 2026, a Programação oficial exige cumprimento da legislação ambiental durante a vigência do financiamento, recibo de inscrição no CAR conforme o MCR em condições rurais aplicáveis, descrição das imposições ambientais e envio de licenças, outorgas, Certoh ou EIA/Rima quando existentes. Também deixa garantias, fiscalização, projeto técnico, assistência técnica, forma de pagamento e encargos de inadimplemento para definição pela instituição financeira. Por isso, a Programação pública não substitui o manual operacional do agente.
+
+A conferência textual da Cartilha FCO 2026 v6 manteve os requisitos documentais e ambientais citados nesta matriz. As alterações identificadas nas tabelas de encargos financeiros não mudam o escopo desta triagem socioambiental.
 
 A Programação FNO 2026 vigente está disponível no MIDR e foi aprovada em nova versão pela Resolução Condel/Sudam nº 141, de 23/02/2026. Para o PNMPO Rural operado por instituição repassadora, ela manda observar as normas do crédito rural e atribui à operadora o risco, o controle e o envio periódico de informações. Em atividades florestais, exige, conforme o caso, licença, PMFS/POA e AUTEX/AUTEF. A Programação pública ainda não substitui o contrato de repasse nem o manual/checklist operacional interno da instituição.
 
@@ -67,7 +69,7 @@ Licença, alvará, outorga, CCIR, projeto técnico, garantias, assistência téc
 - Resolução CMN nº 5.193/2024: https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?numero=5193&tipo=RESOLU%C3%87%C3%83O+CMN
 - Resolução CMN nº 5.267/2025: https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?numero=5267&tipo=Resolu%C3%A7%C3%A3o+CMN
 - Resolução CMN nº 5.303/2026: https://www.bcb.gov.br/estabilidadefinanceira/exibenormativo?numero=5303&tipo=Resolu%C3%A7%C3%A3o+CMN
-- Programação FCO 2026: https://www.gov.br/sudeco/pt-br/assuntos/fundo-constitucional-de-financiamento-do-centro-oeste/programacao-anual-de-financiamento/programacao-2026/Programacao_FCO_2026_3ED_jp.pdf
-- Cartilha FCO 2026: https://www.gov.br/sudeco/pt-br/assuntos/fundo-constitucional-de-financiamento-do-centro-oeste/publicacoes-e-informacoes-gerenciais/CartilhaFCO2026v424Mar2026compactada.pdf
+- Programação FCO 2026, 9ª edição: https://www.gov.br/sudeco/pt-br/assuntos/fundo-constitucional-de-financiamento-do-centro-oeste/programacao-anual-de-financiamento/programacao-2026/programacao_fco_2026_9a-ed.pdf/@@display-file/file
+- Cartilha FCO 2026, v6 de 03/09/2026: https://www.gov.br/sudeco/pt-br/assuntos/fundo-constitucional-de-financiamento-do-centro-oeste/publicacoes-e-informacoes-gerenciais/cartilha-fco-2026-v6-03-09-2026.pdf/@@display-file/file
 - Resoluções Condel/Sudam, incluindo FNO 2026: https://www.gov.br/sudam/pt-br/composicao-1/condel/notas-e-resolucoes
 - Programação Financeira FNO 2026: https://www.gov.br/mdr/pt-br/assuntos/fundos-regionais-e-incentivos-fiscais/fundos-constitucionais-de-financiamento-fno-fne-e-fco/fundo-constitucional-de-financiamento-do-norte-fno/ProgramaoFinanceiraFNO2026.pdf
