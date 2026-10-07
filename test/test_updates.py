@@ -118,6 +118,7 @@ class UpdateTests(unittest.TestCase):
         finally:
             connection.close()
         return path
+
     def _replace_file_catalog(
         self, issued_at: str, version: str, archive: bytes
     ) -> Catalog:
