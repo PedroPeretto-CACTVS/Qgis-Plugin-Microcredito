@@ -39,7 +39,10 @@ from qgis_plugin_microcredito.domain.base_catalog import (
     definition_for,
     display_label,
 )
-from qgis_plugin_microcredito.infrastructure.downloads import validate_geopackage
+from qgis_plugin_microcredito.infrastructure.downloads import (
+    geopackage_foreign_feature_count,
+    validate_geopackage,
+)
 
 CATALOG_SCHEMA_VERSION = 2
 SUPPORTED_CATALOG_SCHEMA_VERSIONS = frozenset((1, CATALOG_SCHEMA_VERSION))
@@ -818,6 +821,14 @@ def _valid_registry_snapshot(value: object) -> dict[str, dict[str, str]]:
     return result
 
 
+def _valid_foreign_feature_count(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise UpdateError(
+            "O ponto de restauração possui contagem de exceções estaduais inválida."
+        )
+    return value
+
+
 def _write_restore_metadata(
     history: Path,
     *,
@@ -831,6 +842,7 @@ def _write_restore_metadata(
     registry_snapshot: dict[str, dict[str, str]],
     restore_version: str | None,
     replaced_version: str | None,
+    foreign_feature_count: int = 0,
 ) -> None:
     if kind not in ("database", "file"):
         raise UpdateError("Tipo de ponto de restauração inválido.")
@@ -849,6 +861,7 @@ def _write_restore_metadata(
         "registry_snapshot": registry_snapshot,
         "restore_version": restore_version,
         "replaced_version": replaced_version,
+        "foreign_feature_count": _valid_foreign_feature_count(foreign_feature_count),
     }
     temporary = history / (RESTORE_METADATA_FILENAME + ".tmp")
     temporary.write_text(
@@ -931,6 +944,11 @@ def _point_from_metadata(data_root: Path, history: Path) -> RestorePoint | None:
         datetime.fromisoformat(created_at.replace("Z", "+00:00"))
         backup_file = document.get("backup_file")
         target_existed = document.get("target_existed") is True
+        foreign_feature_count = _valid_foreign_feature_count(
+            document.get("foreign_feature_count", 0)
+        )
+        if not target_existed and foreign_feature_count:
+            return None
         if target_existed:
             relative_backup = _safe_relative_path(backup_file, "arquivo de restauração")
             if not (history / Path(*PurePosixPath(relative_backup).parts)).is_file():
@@ -1194,6 +1212,39 @@ def _release_update_lock(lock: _UpdateLock) -> None:
         lock.stream.close()
 
 
+def _sicar_target_uf(path: Path) -> str | None:
+    if re.fullmatch(r"[A-Z]{2}_AREA_IMOVEL\.gpkg", path.name):
+        return path.name[:2].upper()
+    return None
+
+
+def _backed_up_foreign_feature_count(path: Path) -> int:
+    uf = _sicar_target_uf(path)
+    if uf is None:
+        return 0
+    try:
+        return geopackage_foreign_feature_count(path, uf)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise UpdateError(
+            "A base SICAR atual não pôde ser validada para criar o ponto de restauração."
+        ) from exc
+
+
+def _restore_foreign_feature_count(
+    document: dict[str, Any], staged_file: Path, uf: str | None
+) -> int:
+    if "foreign_feature_count" in document:
+        return _valid_foreign_feature_count(document["foreign_feature_count"])
+    if uf is None:
+        return 0
+    try:
+        return geopackage_foreign_feature_count(staged_file, uf)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        raise UpdateError(
+            "A cópia SICAR de um histórico legado não pôde ser validada."
+        ) from exc
+
+
 class LocalUpdater:
     """Promove um pacote de dados somente após validação integral em estágio."""
 
@@ -1376,19 +1427,18 @@ class LocalUpdater:
         target = _safe_target(self.data_root, package.target or "")
         source = payloads["file"]
         if target.suffix.lower() == ".gpkg":
-            uf = (
-                target.name[:2].upper()
-                if re.fullmatch(r"[A-Z]{2}_AREA_IMOVEL\.gpkg", target.name)
-                else None
-            )
+            uf = _sicar_target_uf(target)
             validate_geopackage(
                 source, uf=uf, expected_foreign_features=package.foreign_feature_count
             )
         elif source.stat().st_size == 0:
             raise UpdateError("Arquivo de atualização vazio.")
         self._emit_progress(72, "Criando ponto de restauração do arquivo atual…")
-        history = _create_history_directory(self.data_root, package.identifier)
         target_existed = target.exists()
+        foreign_feature_count = (
+            _backed_up_foreign_feature_count(target) if target_existed else 0
+        )
+        history = _create_history_directory(self.data_root, package.identifier)
         backup_name = target.name if target_existed else None
         if target.exists():
             backup = history / target.name
@@ -1405,6 +1455,7 @@ class LocalUpdater:
             registry_snapshot=registry_snapshot,
             restore_version=restore_version,
             replaced_version=package.version,
+            foreign_feature_count=foreign_feature_count,
         )
         target.parent.mkdir(parents=True, exist_ok=True)
         # O bloqueio exclusivo da atualização elimina concorrência; um nome
@@ -1748,6 +1799,7 @@ class LocalRestorer:
         target_existed: bool,
         registry: dict[str, dict[str, str]],
         current_version: str | None,
+        foreign_feature_count: int = 0,
     ) -> None:
         package = document["package"]
         _write_restore_metadata(
@@ -1762,6 +1814,7 @@ class LocalRestorer:
             registry_snapshot=registry,
             restore_version=current_version,
             replaced_version=point.restore_version,
+            foreign_feature_count=foreign_feature_count,
         )
 
     def _restore_database(
@@ -1882,12 +1935,20 @@ class LocalRestorer:
             staged_file = staging / target.name
             shutil.copy2(source, staged_file)
             if target.suffix.lower() == ".gpkg":
-                uf = (
-                    target.name[:2].upper()
-                    if re.fullmatch(r"[A-Z]{2}_AREA_IMOVEL\.gpkg", target.name)
-                    else None
+                uf = _sicar_target_uf(target)
+                expected_foreign_features = _restore_foreign_feature_count(
+                    document, staged_file, uf
                 )
-                validate_geopackage(staged_file, uf=uf)
+                try:
+                    validate_geopackage(
+                        staged_file,
+                        uf=uf,
+                        expected_foreign_features=expected_foreign_features,
+                    )
+                except (OSError, sqlite3.Error, ValueError) as exc:
+                    raise UpdateError(
+                        "A cópia anterior da base SICAR não passou na validação."
+                    ) from exc
             elif staged_file.stat().st_size == 0:
                 raise UpdateError("A cópia anterior do arquivo está vazia.")
 
@@ -1898,8 +1959,11 @@ class LocalRestorer:
         self._emit_progress(
             55, "Preservando o arquivo atual para desfazer a restauração…"
         )
-        undo = _create_history_directory(self.data_root, point.identifier)
         current_exists = target.is_file()
+        current_foreign_feature_count = (
+            _backed_up_foreign_feature_count(target) if current_exists else 0
+        )
+        undo = _create_history_directory(self.data_root, point.identifier)
         undo_name = target.name if current_exists else None
         if current_exists:
             shutil.copy2(target, undo / target.name)
@@ -1913,6 +1977,7 @@ class LocalRestorer:
             target_existed=current_exists,
             registry=current_registry,
             current_version=current_version,
+            foreign_feature_count=current_foreign_feature_count,
         )
 
         registry_to_restore = self._registry_to_restore(
