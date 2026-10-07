@@ -68,3 +68,29 @@ def test_sicar_routing_audit_emits_only_aggregates(tmp_path: Path) -> None:
         }
     ]
     assert "AL-DUPLICADO" not in json.dumps(report, ensure_ascii=False)
+
+
+def test_sicar_routing_audit_counts_distinct_car_identifiers(tmp_path: Path) -> None:
+    for uf in UFS:
+        identifiers = [f"{uf}-REGISTRO"]
+        if uf == "AC":
+            identifiers.extend(["AL-DUPLICADO", "AL-DUPLICADO"])
+        if uf == "AL":
+            identifiers.extend(["AL-DUPLICADO", "AL-DUPLICADO"])
+        _create_sicar_source(
+            tmp_path / "car" / uf / f"{uf}_AREA_IMOVEL.gpkg",
+            identifiers,
+        )
+
+    report = audit(tmp_path)
+
+    assert report["total_fora_da_uf"] == 1
+    assert report["rotas"] == [
+        {
+            "arquivo_origem": "AC",
+            "prefixo_car": "AL",
+            "registros_fora_da_uf": 1,
+            "tambem_presentes_no_arquivo_correto": 1,
+            "ausentes_no_arquivo_correto": 0,
+        }
+    ]
