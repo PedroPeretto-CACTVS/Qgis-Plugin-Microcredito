@@ -4,8 +4,58 @@ import json
 import sqlite3
 from pathlib import Path
 
+from pytest import MonkeyPatch
+from tools import validate_production_sources
 from tools.audit_sicar_state_routing import audit
 from tools.inventory_production_sources import UFS, inventory
+
+
+def test_validation_reports_missing_sicar_and_mma_sources(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    data_root = tmp_path / "dados"
+    corrupt_sicar = data_root / "car" / "AC" / "AC_AREA_IMOVEL.gpkg"
+    corrupt_sicar.parent.mkdir(parents=True)
+    corrupt_sicar.write_bytes(b"arquivo-invalido")
+    diagnostic_calls: list[tuple[Path, str]] = []
+
+    def reject_corrupt_sicar(path: Path, expected_uf: str) -> dict[str, object]:
+        diagnostic_calls.append((path, expected_uf))
+        raise ValueError("GeoPackage SICAR inválido")
+
+    monkeypatch.setattr(
+        validate_production_sources,
+        "_sicar_mismatch_summary",
+        reject_corrupt_sicar,
+    )
+
+    report = validate_production_sources.validate(
+        data_root, tmp_path / "banco-ausente.db"
+    )
+
+    sicar_checks = [
+        check
+        for check in report["checks"]
+        if str(check["base"]).startswith("sicar_imoveis_")
+    ]
+    assert diagnostic_calls == [(corrupt_sicar, "AC")]
+    assert len(sicar_checks) == len(UFS)
+    assert (
+        next(check for check in sicar_checks if check["base"] == "sicar_imoveis_ac")[
+            "status"
+        ]
+        == "bloqueada"
+    )
+    assert all(
+        check["status"] == "ausente"
+        for check in sicar_checks
+        if check["base"] != "sicar_imoveis_ac"
+    )
+    assert next(check for check in report["checks"] if check["base"] == "mma_mcr") == {
+        "base": "mma_mcr",
+        "path": "mma/PUBLICACAO_MMA_A_DEFINIR.zip",
+        "status": "ausente",
+    }
 
 
 def _create_sicar_source(path: Path, identifiers: list[str]) -> None:
