@@ -1,6 +1,7 @@
 import hashlib
 import json
 import shutil
+import sqlite3
 import subprocess
 import sys
 import unittest
@@ -8,7 +9,8 @@ import zipfile
 from pathlib import Path
 from uuid import uuid4
 
-from installer.package_build import validate_inputs
+from database.schema import SCHEMA_VERSION
+from installer.package_build import validate_inputs, validate_sources
 from installer.plugin_build import build
 
 
@@ -60,6 +62,24 @@ class DistributionTests(unittest.TestCase):
             (folder / "AC_AREA_IMOVEL.gpkg").write_bytes(b"invalid")
         with self.assertRaisesRegex(ValueError, "exatamente uma vez"):
             validate_inputs(self.root)
+
+    def test_package_sources_expect_runtime_schema_version(self):
+        database = self.root / "car_microcredito.db"
+        connection = sqlite3.connect(database)
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        connection.close()
+
+        with self.assertRaisesRegex(ValueError, "Bases estaduais divergentes"):
+            validate_sources(self.root)
+
+        connection = sqlite3.connect(database)
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION - 1}")
+        connection.close()
+        with self.assertRaisesRegex(
+            ValueError,
+            rf"esquema {SCHEMA_VERSION - 1}; esperado {SCHEMA_VERSION}",
+        ):
+            validate_sources(self.root)
 
     def test_qgis_runtime_core_does_not_require_pydantic_or_sqlalchemy(self):
         source = Path(__file__).resolve().parents[1] / "src"

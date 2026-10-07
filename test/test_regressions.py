@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from cli.admin import main as cli_main
-from database.schema import SCHEMA, configure_import, initialize
+from database.schema import SCHEMA, SCHEMA_VERSION, configure_import, initialize
 from database.session import connect
 from plugin.batch import read_batch_xlsx
 from qgis_plugin_microcredito.application.backup_service import (
@@ -181,6 +181,18 @@ class RegressionTests(unittest.TestCase):
         old = self.root / "old.db"
         sqlite3.connect(old).close()
         with self.assertRaises(ValueError):
+            connect(old, readonly=True)
+
+    def test_readonly_schema_error_reports_actual_versions(self):
+        old = self.root / "old-schema.db"
+        connection = sqlite3.connect(old)
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION - 1}")
+        connection.close()
+
+        with self.assertRaisesRegex(
+            ValueError,
+            rf"esquema {SCHEMA_VERSION - 1}; esperado {SCHEMA_VERSION}",
+        ):
             connect(old, readonly=True)
 
     def test_snapshot_includes_uncheckpointed_wal(self):
