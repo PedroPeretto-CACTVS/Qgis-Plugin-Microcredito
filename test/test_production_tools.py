@@ -28,6 +28,16 @@ def _create_sicar_source(path: Path, identifiers: list[str]) -> None:
         connection.close()
 
 
+def test_signed_catalog_requires_powershell_75_for_date_kind() -> None:
+    script = (
+        Path(__file__).parents[1] / "tools" / "build_signed_catalog.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert 'if ($PSVersionTable.PSVersion -lt [version]"7.5") {' in script
+    assert "A assinatura exige PowerShell 7.5+" in script
+    assert "ConvertFrom-Json -DateKind String" in script
+
+
 def test_inventory_reports_publication_blockers_without_exposing_root(
     tmp_path: Path,
 ) -> None:
