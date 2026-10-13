@@ -18,8 +18,11 @@ from qgis.core import (
     QgsVectorLayer,
 )
 from qgis.gui import QgsMapCanvas
+from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import QMessageBox
 
+QGIS_TEST_SETTINGS = Path(".test-data") / "qsettings" / uuid4().hex
+QGIS_TEST_SETTINGS.mkdir(parents=True, exist_ok=True)
 from database.schema import initialize
 from database.session import connect
 from plugin import batch_window, car_document_window, plugin
@@ -40,6 +43,14 @@ from plugin.worker import EnvironmentalWorker
 from qgis_plugin_microcredito.application.import_service import import_file
 
 
+def isolated_qsettings(*_args, **_kwargs):
+    return QSettings(str(QGIS_TEST_SETTINGS / "settings.ini"), QSettings.IniFormat)
+
+
+for settings_module in (plugin, batch_window, car_document_window):
+    settings_module.QSettings = isolated_qsettings
+
+
 class Iface:
     @staticmethod
     def mainWindow():
@@ -57,6 +68,65 @@ class QgisRegressionTests(unittest.TestCase):
 
     def tearDown(self):
         pass  # O pool OGR pode manter arquivos abertos até QgsApplication.exitQgis.
+
+    def test_reused_search_window_refreshes_paths_from_qsettings(self):
+        class RuntimeSettings:
+            def __init__(self):
+                self.values = {
+                    "database": r"C:\Projetos\QGIS-Microcredito-Dados\car_microcredito.db",
+                    "car_base": r"C:\Projetos\QGIS-Microcredito-Dados\car",
+                }
+                self.sync_calls = 0
+
+            def sync(self):
+                self.sync_calls += 1
+
+            def value(self, key, default="", type=None):
+                return self.values.get(key, default)
+
+            def setValue(self, key, value):
+                self.values[key] = value
+
+        window = plugin.SearchWindow(Iface())
+        window.db_path.setText(r"C:\antigo\OneDrive\car_microcredito.db")
+        window.car_base_path.setText(r"C:\antigo\OneDrive\car")
+        window.settings = RuntimeSettings()
+        application = plugin.CarMicrocreditoPlugin(Iface())
+        application.window = window
+
+        application.show_window()
+
+        self.assertEqual(window.settings.sync_calls, 1)
+        self.assertEqual(
+            window.db_path.text(),
+            r"C:\Projetos\QGIS-Microcredito-Dados\car_microcredito.db",
+        )
+        self.assertEqual(
+            window.car_base_path.text(), r"C:\Projetos\QGIS-Microcredito-Dados\car"
+        )
+        window.close()
+
+    def test_runtime_paths_file_overrides_stale_user_settings(self):
+        database = self.root / "dados" / "car_microcredito.db"
+        database.parent.mkdir(parents=True)
+        database.touch()
+        car_base = self.root / "car"
+        car_base.mkdir()
+        runtime_paths = self.root / "runtime_paths.json"
+        runtime_paths.write_text(
+            json.dumps({"database": str(database), "car_base": str(car_base)}),
+            encoding="utf-8",
+        )
+        window = plugin.SearchWindow(Iface())
+        window.db_path.setText(r"C:\antigo\OneDrive\car_microcredito.db")
+        window.car_base_path.setText(r"C:\antigo\OneDrive\car")
+
+        with patch.object(plugin, "RUNTIME_PATHS_FILE", runtime_paths):
+            window.reload_local_paths()
+
+        self.assertEqual(window.db_path.text(), str(database))
+        self.assertEqual(window.car_base_path.text(), str(car_base))
+        window.close()
 
     def layer(self, polygons, crs="EPSG:3857"):
         layer = QgsVectorLayer(f"Polygon?crs={crs}", "test", "memory")
