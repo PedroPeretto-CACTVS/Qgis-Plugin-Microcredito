@@ -91,6 +91,7 @@ from .report import write_report
 from .worker import run_environment
 
 SUPREME_MODE = (Path(__file__).parent / "supreme_mode.txt").is_file()
+RUNTIME_PATHS_FILE = Path(__file__).with_name("runtime_paths.json")
 
 RESOURCE_SOURCE_OPTIONS = (
     ("Automática pela UF do CAR — sugestão", AUTOMATIC_RESOURCE_SOURCE),
@@ -106,6 +107,24 @@ CREDIT_LINE_OPTIONS = (
 def normalized_document_value(value: object) -> str:
     digits = "".join(char for char in str(value or "") if char.isdigit())
     return digits if len(digits) in (11, 14) else ""
+
+
+def runtime_local_paths() -> dict[str, str]:
+    """Lê caminhos fixados pela instalação local, sem depender do QSettings."""
+    try:
+        payload = json.loads(RUNTIME_PATHS_FILE.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    paths = {}
+    database = str(payload.get("database") or "").strip()
+    car_base = str(payload.get("car_base") or "").strip()
+    if database and Path(database).is_file():
+        paths["database"] = database
+    if car_base and Path(car_base).is_dir():
+        paths["car_base"] = car_base
+    return paths
 
 
 def documents_for_mte(associated_documents, *additional_values) -> list[str]:
@@ -183,6 +202,7 @@ class CarMicrocreditoPlugin:
     def show_window(self):
         if self.window is None:
             self.window = SearchWindow(self.iface, supreme_mode=SUPREME_MODE)
+        self.window.reload_local_paths()
         self.window.show()
         self.window.raise_()
         self.window.activateWindow()
@@ -568,6 +588,27 @@ class SearchWindow(QDialog):
         else:
             self.content_splitter.setSizes([390, 135])
         self._update_resource_source_suggestion()
+
+    def reload_local_paths(self) -> None:
+        """Atualiza os campos quando outra sessão alterou a configuração local."""
+        self.settings.sync()
+        runtime_paths = runtime_local_paths()
+        saved_db = runtime_paths.get("database") or self.settings.value(
+            "database", "", type=str
+        )
+        saved_car_base = runtime_paths.get("car_base") or self.settings.value(
+            "car_base", "", type=str
+        )
+        if not saved_car_base and saved_db:
+            automatic_car_base = Path(saved_db).resolve().parent / "car"
+            if automatic_car_base.is_dir():
+                saved_car_base = str(automatic_car_base)
+        self.db_path.setText(saved_db)
+        self.car_base_path.setText(saved_car_base)
+        if runtime_paths:
+            self.settings.setValue("database", saved_db)
+            self.settings.setValue("car_base", saved_car_base)
+            self.settings.sync()
 
     def open_batch_window(self):
         if self.batch_window is None:
