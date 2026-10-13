@@ -35,9 +35,20 @@ from qgis.PyQt.QtWidgets import (
 )
 
 
-DEFAULT_CATALOG_URL = (
-    "https://api.github.com/repos/PedroPeretto-CACTVS/Qgis-Plugin-Microcredito/"
-    "contents/updates/producao/catalog.json?ref=main"
+DEFAULT_CATALOG_URL = ""
+RETIRED_CATALOG_URLS = frozenset(
+    {
+        (
+            "https://api.github.com/repos/Andre-Marchetti-Cactvs/"
+            "Qgis_plugin-microcredito/contents/updates/homologacao/catalog.json?"
+            "ref=codex%2F0.9.0-central-updater"
+        ),
+        (
+            "https://api.github.com/repos/Andre-Marchetti-Cactvs/"
+            "Qgis_plugin-microcredito/contents/updates/homologacao/catalog.json?"
+            "ref=codex%2Fhomologacao-0.9.8-atualizacao-bases"
+        ),
+    }
 )
 
 
@@ -240,8 +251,17 @@ class UpdateWindow(QDialog):
         database_row.addWidget(self.database, 1)
         database_row.addWidget(choose_database)
 
-        self.catalog_url = QLineEdit(self.settings.value("updates/catalog_url", DEFAULT_CATALOG_URL, type=str))
-        self.catalog_url.setPlaceholderText(DEFAULT_CATALOG_URL)
+        saved_catalog_url = self.settings.value(
+            "updates/catalog_url", DEFAULT_CATALOG_URL, type=str
+        ).strip()
+        if saved_catalog_url in RETIRED_CATALOG_URLS:
+            self.settings.remove("updates/catalog_url")
+            self.settings.sync()
+            saved_catalog_url = DEFAULT_CATALOG_URL
+        self.catalog_url = QLineEdit(saved_catalog_url)
+        self.catalog_url.setPlaceholderText(
+            "Informe a URL HTTPS de um catálogo assinado homologado"
+        )
         self.catalog_url.setToolTip("Somente HTTPS. O endereço não recebe nenhuma informação da consulta.")
 
         self.auth_config = QgsAuthConfigSelect(self)
@@ -262,9 +282,10 @@ class UpdateWindow(QDialog):
         setup_layout.addRow("Credencial do GitHub privado", self.auth_config)
 
         self.test_warning = QLabel(
-            "Atualização 0.9.5 por catálogo assinado: downloads grandes podem ser retomados; a credencial fica "
-            "no banco de autenticação criptografado do QGIS; nenhum CPF/CNPJ, CAR, geometria ou resultado de "
-            "consulta é enviado ao GitHub."
+            "O repositório do publicador não contém catálogo de produção assinado. "
+            "O inventário local e a restauração continuam disponíveis; para homologar "
+            "atualizações, configure manualmente uma URL HTTPS de catálogo assinado. "
+            "Nenhum CPF/CNPJ, CAR, geometria ou resultado de consulta é enviado."
         )
         self.test_warning.setObjectName("warning")
         self.test_warning.setWordWrap(True)
@@ -422,7 +443,8 @@ class UpdateWindow(QDialog):
         if not catalog_url:
             QMessageBox.information(
                 self, "Catálogo de homologação",
-                "A versão de teste não possui URL de produção. Informe a URL HTTPS do catálogo assinado de homologação."
+                "O repositório do publicador não possui catálogo de produção assinado. "
+                "Informe uma URL HTTPS de catálogo assinado somente para homologação."
             )
             return
         try:
