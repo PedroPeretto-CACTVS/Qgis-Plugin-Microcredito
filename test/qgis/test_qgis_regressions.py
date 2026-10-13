@@ -467,6 +467,31 @@ class QgisRegressionTests(unittest.TestCase):
         self.assertEqual(calls, ["2"])
         window.close()
 
+    def test_missing_owner_blocks_final_report_before_directory_prompt(self):
+        database = self.root / "dados" / "test.db"
+        connection = connect(database)
+        initialize(connection)
+        connection.close()
+        window = plugin.SearchWindow(Iface())
+        window.db_path.setText(str(database))
+        window.car.setText("MT-TESTE")
+
+        with (
+            patch.object(window, "_select_report_directory") as chooser,
+            patch.object(QMessageBox, "information") as information,
+            patch.object(QMessageBox, "critical") as error,
+        ):
+            window.analyze_selected("final")
+
+        self.assertFalse(chooser.called)
+        self.assertFalse(error.called, error.call_args)
+        self.assertEqual(
+            information.call_args.args[1], "Proprietário/possuidor necessário"
+        )
+        self.assertTrue(window.owner_document.property("requiredMissing"))
+        self.assertIn("Relatório não gerado", window.processing_label.text())
+        window.close()
+
     def write_sheet(self, path, cars):
         ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
         headers = [

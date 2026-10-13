@@ -245,6 +245,8 @@ class SearchWindow(QDialog):
         self.car_document_window = None
         self.results = []
         self._busy_depth = 0
+        self._processing_outcome = None
+        self._focus_after_processing = None
         self._owner_needed = False
         self.last_analysis = None
         self._technical_decision = None
@@ -347,7 +349,13 @@ class SearchWindow(QDialog):
         car_document_row.addWidget(search_car_document)
 
         self.owner_document = QLineEdit()
-        self.owner_document.setPlaceholderText("CPF ou CNPJ do proprietário/possuidor")
+        self.owner_document.setPlaceholderText(
+            "CPF ou CNPJ do proprietário/possuidor — obrigatório para o relatório"
+        )
+        self.owner_document.setToolTip(
+            "Obrigatório para gerar o relatório quando a base local não comprova "
+            "o vínculo do proprietário ou possuidor com o CAR."
+        )
         self.owner_document.textChanged.connect(self._owner_document_changed)
 
         self.fund = QComboBox()
@@ -549,6 +557,7 @@ class SearchWindow(QDialog):
         top_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         top_scroll.setWidget(top_content)
         top_scroll.setMinimumHeight(175)
+        self.top_scroll = top_scroll
 
         self.content_splitter = QSplitter(Qt.Vertical)
         self.content_splitter.setObjectName("contentSplitter")
@@ -674,6 +683,8 @@ class SearchWindow(QDialog):
 
     def _begin_processing(self, message: str):
         if not self._busy_depth:
+            self._processing_outcome = None
+            self._focus_after_processing = None
             self._input_controls = self.findChildren(QLineEdit) + [self.table]
             for control in self._input_controls:
                 control.setEnabled(False)
@@ -684,6 +695,10 @@ class SearchWindow(QDialog):
             control.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         QApplication.processEvents()
+
+    def _set_processing_outcome(self, message: str, focus=None):
+        self._processing_outcome = message
+        self._focus_after_processing = focus
 
     def _set_owner_required(self, required: bool):
         self._owner_needed = required
@@ -734,11 +749,20 @@ class SearchWindow(QDialog):
         if self._busy_depth:
             return
         self.processing_bar.hide()
-        self.processing_label.setText("Processamento concluído.")
+        self.processing_label.setText(
+            self._processing_outcome or "Processamento concluído."
+        )
         for control in self.interactive_controls:
             control.setEnabled(True)
         for control in getattr(self, "_input_controls", []):
             control.setEnabled(True)
+        if self._focus_after_processing is not None:
+            self.top_scroll.ensureWidgetVisible(
+                self._focus_after_processing, 24, 24
+            )
+            self._focus_after_processing.setFocus()
+        self._processing_outcome = None
+        self._focus_after_processing = None
         QApplication.processEvents()
 
     def select_database(self):
@@ -1610,10 +1634,6 @@ class SearchWindow(QDialog):
             self.fund.setFocus()
             return
         selected_report_dir = None
-        if mode == "final":
-            selected_report_dir = self._select_report_directory()
-            if selected_report_dir is None:
-                return
         self._begin_processing("Preparando os dados da análise…")
         try:
             (
@@ -1643,6 +1663,11 @@ class SearchWindow(QDialog):
                 manual_document = self._normalized_owner_document()
                 if manual_raw and not manual_document:
                     self._set_owner_required(True)
+                    self._set_processing_outcome(
+                        "Relatório não gerado: informe 11 dígitos para CPF ou "
+                        "14 dígitos para CNPJ do proprietário/possuidor.",
+                        self.owner_document,
+                    )
                     QMessageBox.information(
                         self,
                         "CPF/CNPJ inválido",
@@ -1670,6 +1695,11 @@ class SearchWindow(QDialog):
                     owner_documents = require_owner_documents(associated_documents)
                 except ValueError as exc:
                     self._set_owner_required(True)
+                    self._set_processing_outcome(
+                        "Relatório não gerado: informe o CPF/CNPJ completo do "
+                        "proprietário/possuidor no campo destacado em vermelho.",
+                        self.owner_document,
+                    )
                     QMessageBox.information(
                         self,
                         "Proprietário/possuidor necessário",
@@ -1689,6 +1719,13 @@ class SearchWindow(QDialog):
                 database_evidence = collect_database_evidence(connection)
             finally:
                 connection.close()
+            if mode == "final":
+                selected_report_dir = self._select_report_directory()
+                if selected_report_dir is None:
+                    self._set_processing_outcome(
+                        "Relatório não gerado: seleção da pasta de destino cancelada."
+                    )
+                    return
             result = result or {
                 "ref_bacen": "",
                 "nu_ordem": "",
@@ -1835,7 +1872,11 @@ class SearchWindow(QDialog):
                 f"{(analysis.get('decisao_tecnica') or {}).get('rotulo', 'Pendente')}"
                 f"\n\nPDF: {pdf_path}\nJSON: {json_path}",
             )
+            self._set_processing_outcome(
+                f"Relatório criado com sucesso: {pdf_path.parent}"
+            )
         except Exception as exc:
+            self._set_processing_outcome(f"Falha ao gerar relatório: {exc}")
             QMessageBox.critical(self, "Falha na análise", str(exc))
         finally:
             self._end_processing()
