@@ -91,6 +91,7 @@ from .report import write_report
 from .worker import run_environment
 
 SUPREME_MODE = (Path(__file__).parent / "supreme_mode.txt").is_file()
+RUNTIME_PATHS_FILE = Path(__file__).with_name("runtime_paths.json")
 
 RESOURCE_SOURCE_OPTIONS = (
     ("Automática pela UF do CAR — sugestão", AUTOMATIC_RESOURCE_SOURCE),
@@ -106,6 +107,24 @@ CREDIT_LINE_OPTIONS = (
 def normalized_document_value(value: object) -> str:
     digits = "".join(char for char in str(value or "") if char.isdigit())
     return digits if len(digits) in (11, 14) else ""
+
+
+def runtime_local_paths() -> dict[str, str]:
+    """Lê caminhos fixados pela instalação local, sem depender do QSettings."""
+    try:
+        payload = json.loads(RUNTIME_PATHS_FILE.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    paths = {}
+    database = str(payload.get("database") or "").strip()
+    car_base = str(payload.get("car_base") or "").strip()
+    if database and Path(database).is_file():
+        paths["database"] = database
+    if car_base and Path(car_base).is_dir():
+        paths["car_base"] = car_base
+    return paths
 
 
 def documents_for_mte(associated_documents, *additional_values) -> list[str]:
@@ -183,6 +202,7 @@ class CarMicrocreditoPlugin:
     def show_window(self):
         if self.window is None:
             self.window = SearchWindow(self.iface, supreme_mode=SUPREME_MODE)
+        self.window.reload_local_paths()
         self.window.show()
         self.window.raise_()
         self.window.activateWindow()
@@ -225,6 +245,8 @@ class SearchWindow(QDialog):
         self.car_document_window = None
         self.results = []
         self._busy_depth = 0
+        self._processing_outcome = None
+        self._focus_after_processing = None
         self._owner_needed = False
         self.last_analysis = None
         self._technical_decision = None
@@ -327,7 +349,13 @@ class SearchWindow(QDialog):
         car_document_row.addWidget(search_car_document)
 
         self.owner_document = QLineEdit()
-        self.owner_document.setPlaceholderText("CPF ou CNPJ do proprietário/possuidor")
+        self.owner_document.setPlaceholderText(
+            "CPF ou CNPJ do proprietário/possuidor — obrigatório para o relatório"
+        )
+        self.owner_document.setToolTip(
+            "Obrigatório para gerar o relatório quando a base local não comprova "
+            "o vínculo do proprietário ou possuidor com o CAR."
+        )
         self.owner_document.textChanged.connect(self._owner_document_changed)
 
         self.fund = QComboBox()
@@ -529,6 +557,7 @@ class SearchWindow(QDialog):
         top_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         top_scroll.setWidget(top_content)
         top_scroll.setMinimumHeight(175)
+        self.top_scroll = top_scroll
 
         self.content_splitter = QSplitter(Qt.Vertical)
         self.content_splitter.setObjectName("contentSplitter")
@@ -568,6 +597,27 @@ class SearchWindow(QDialog):
         else:
             self.content_splitter.setSizes([390, 135])
         self._update_resource_source_suggestion()
+
+    def reload_local_paths(self) -> None:
+        """Atualiza os campos quando outra sessão alterou a configuração local."""
+        self.settings.sync()
+        runtime_paths = runtime_local_paths()
+        saved_db = runtime_paths.get("database") or self.settings.value(
+            "database", "", type=str
+        )
+        saved_car_base = runtime_paths.get("car_base") or self.settings.value(
+            "car_base", "", type=str
+        )
+        if not saved_car_base and saved_db:
+            automatic_car_base = Path(saved_db).resolve().parent / "car"
+            if automatic_car_base.is_dir():
+                saved_car_base = str(automatic_car_base)
+        self.db_path.setText(saved_db)
+        self.car_base_path.setText(saved_car_base)
+        if runtime_paths:
+            self.settings.setValue("database", saved_db)
+            self.settings.setValue("car_base", saved_car_base)
+            self.settings.sync()
 
     def open_batch_window(self):
         if self.batch_window is None:
@@ -633,6 +683,8 @@ class SearchWindow(QDialog):
 
     def _begin_processing(self, message: str):
         if not self._busy_depth:
+            self._processing_outcome = None
+            self._focus_after_processing = None
             self._input_controls = self.findChildren(QLineEdit) + [self.table]
             for control in self._input_controls:
                 control.setEnabled(False)
@@ -643,6 +695,10 @@ class SearchWindow(QDialog):
             control.setEnabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         QApplication.processEvents()
+
+    def _set_processing_outcome(self, message: str, focus=None):
+        self._processing_outcome = message
+        self._focus_after_processing = focus
 
     def _set_owner_required(self, required: bool):
         self._owner_needed = required
@@ -693,11 +749,20 @@ class SearchWindow(QDialog):
         if self._busy_depth:
             return
         self.processing_bar.hide()
-        self.processing_label.setText("Processamento concluído.")
+        self.processing_label.setText(
+            self._processing_outcome or "Processamento concluído."
+        )
         for control in self.interactive_controls:
             control.setEnabled(True)
         for control in getattr(self, "_input_controls", []):
             control.setEnabled(True)
+        if self._focus_after_processing is not None:
+            self.top_scroll.ensureWidgetVisible(
+                self._focus_after_processing, 24, 24
+            )
+            self._focus_after_processing.setFocus()
+        self._processing_outcome = None
+        self._focus_after_processing = None
         QApplication.processEvents()
 
     def select_database(self):
@@ -1569,10 +1634,6 @@ class SearchWindow(QDialog):
             self.fund.setFocus()
             return
         selected_report_dir = None
-        if mode == "final":
-            selected_report_dir = self._select_report_directory()
-            if selected_report_dir is None:
-                return
         self._begin_processing("Preparando os dados da análise…")
         try:
             (
@@ -1602,6 +1663,11 @@ class SearchWindow(QDialog):
                 manual_document = self._normalized_owner_document()
                 if manual_raw and not manual_document:
                     self._set_owner_required(True)
+                    self._set_processing_outcome(
+                        "Relatório não gerado: informe 11 dígitos para CPF ou "
+                        "14 dígitos para CNPJ do proprietário/possuidor.",
+                        self.owner_document,
+                    )
                     QMessageBox.information(
                         self,
                         "CPF/CNPJ inválido",
@@ -1629,6 +1695,11 @@ class SearchWindow(QDialog):
                     owner_documents = require_owner_documents(associated_documents)
                 except ValueError as exc:
                     self._set_owner_required(True)
+                    self._set_processing_outcome(
+                        "Relatório não gerado: informe o CPF/CNPJ completo do "
+                        "proprietário/possuidor no campo destacado em vermelho.",
+                        self.owner_document,
+                    )
                     QMessageBox.information(
                         self,
                         "Proprietário/possuidor necessário",
@@ -1648,6 +1719,13 @@ class SearchWindow(QDialog):
                 database_evidence = collect_database_evidence(connection)
             finally:
                 connection.close()
+            if mode == "final":
+                selected_report_dir = self._select_report_directory()
+                if selected_report_dir is None:
+                    self._set_processing_outcome(
+                        "Relatório não gerado: seleção da pasta de destino cancelada."
+                    )
+                    return
             result = result or {
                 "ref_bacen": "",
                 "nu_ordem": "",
@@ -1794,7 +1872,11 @@ class SearchWindow(QDialog):
                 f"{(analysis.get('decisao_tecnica') or {}).get('rotulo', 'Pendente')}"
                 f"\n\nPDF: {pdf_path}\nJSON: {json_path}",
             )
+            self._set_processing_outcome(
+                f"Relatório criado com sucesso: {pdf_path.parent}"
+            )
         except Exception as exc:
+            self._set_processing_outcome(f"Falha ao gerar relatório: {exc}")
             QMessageBox.critical(self, "Falha na análise", str(exc))
         finally:
             self._end_processing()
