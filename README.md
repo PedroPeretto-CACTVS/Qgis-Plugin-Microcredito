@@ -199,6 +199,7 @@ Os resultados são **evidências para triagem**, não aprovação automática de
 | Documento | Conteúdo |
 |-----------|----------|
 | [docs/MIGRACAO_GPT_0_9_4.md](docs/MIGRACAO_GPT_0_9_4.md) | Mapa das funcionalidades migradas e publicação segura |
+| [docs/CONTRATO_ATUALIZACAO_BASES_V3.md](docs/CONTRATO_ATUALIZACAO_BASES_V3.md) | Evidência oficial, compatibilidade e cadeia de publicação do catálogo v3 |
 | [docs/FLUXOGRAMA_APLICACAO_0_9_4.md](docs/FLUXOGRAMA_APLICACAO_0_9_4.md) | Todos os caminhos de consulta, decisão, atualização e restauração |
 | [docs/MODULOS_FISCAIS_0_9_5.md](docs/MODULOS_FISCAIS_0_9_5.md) | Regra territorial, fontes oficiais, persistência e fluxo dos módulos fiscais |
 | [docs/GUIA_VERSAO_0_8.md](docs/GUIA_VERSAO_0_8.md) | Migração de banco, ativação de importações e mudanças da versão |
