@@ -381,6 +381,169 @@ class UpdateTests(unittest.TestCase):
         with self.assertRaisesRegex(UpdateError, "Destino não corresponde"):
             _parse_catalog(json.dumps(document).encode())
 
+    def test_schema_three_requires_official_evidence_and_runtime_compatibility(self):
+        document = {
+            "schema_version": 3,
+            "issued_at": "2026-10-14T12:00:00-03:00",
+            "expires_at": "2026-11-14T12:00:00-03:00",
+            "publication": {
+                "channel": "homologacao",
+                "prepared_by": "Equipe de Dados",
+                "change_reference": "MUD-2026-002",
+            },
+            "packages": [
+                {
+                    "id": "sicar_imoveis_ac",
+                    "label": "SICAR/AC",
+                    "version": "2026.10.14",
+                    "strategy": "replace_file",
+                    "provides": ["sicar_imoveis_ac"],
+                    "source_date": "2026-10-14",
+                    "source_reference": "SICAR — extração estadual AC",
+                    "source_evidence": {
+                        "official_page_url": "https://www.gov.br/agricultura/sicar",
+                        "official_artifact_url": "https://example.gov.br/sicar/ac.gpkg",
+                        "checked_at": "2026-10-14T11:30:00-03:00",
+                    },
+                    "compatibility": {
+                        "minimum_plugin_version": "0.9.5",
+                        "maximum_plugin_version": "0.9.5",
+                        "database_schema_version": SCHEMA_VERSION,
+                        "package_manifest_schema_version": 1,
+                    },
+                    "url": "https://publisher.example/sicar-ac.zip",
+                    "sha256": "a" * 64,
+                    "size_bytes": 123,
+                    "target": "car/AC/AC_AREA_IMOVEL.gpkg",
+                }
+            ],
+        }
+
+        catalog = _parse_catalog(json.dumps(document).encode())
+        package = catalog.packages[0]
+
+        self.assertEqual(catalog.schema_version, 3)
+        self.assertEqual(package.minimum_plugin_version, "0.9.5")
+        self.assertEqual(package.maximum_plugin_version, "0.9.5")
+        self.assertEqual(package.database_schema_version, SCHEMA_VERSION)
+        self.assertEqual(package.package_manifest_schema_version, 1)
+        self.assertEqual(
+            package.official_page_url, "https://www.gov.br/agricultura/sicar"
+        )
+        self.assertEqual(package.source_checked_at, "2026-10-14T14:30:00+00:00")
+
+        document["packages"][0]["source_evidence"]["official_page_url"] = (
+            "http://example.gov.br/sicar"
+        )
+        with self.assertRaisesRegex(UpdateError, "URL oficial"):
+            _parse_catalog(json.dumps(document).encode())
+
+    def test_incompatible_schema_three_package_is_neither_offered_nor_downloaded(self):
+        document = {
+            "schema_version": 3,
+            "issued_at": "2026-10-14T12:00:00-03:00",
+            "expires_at": "2026-11-14T12:00:00-03:00",
+            "publication": {
+                "channel": "homologacao",
+                "prepared_by": "Equipe de Dados",
+                "change_reference": "MUD-2026-003",
+            },
+            "packages": [
+                {
+                    "id": "sicar_imoveis_ac",
+                    "label": "SICAR/AC",
+                    "version": "2026.10.14",
+                    "strategy": "replace_file",
+                    "provides": ["sicar_imoveis_ac"],
+                    "source_date": "2026-10-14",
+                    "source_reference": "SICAR — extração estadual AC",
+                    "source_evidence": {
+                        "official_page_url": "https://www.gov.br/agricultura/sicar",
+                        "checked_at": "2026-10-14T11:30:00-03:00",
+                    },
+                    "compatibility": {
+                        "minimum_plugin_version": "99.0.0",
+                        "maximum_plugin_version": "99.0.0",
+                        "database_schema_version": SCHEMA_VERSION,
+                        "package_manifest_schema_version": 1,
+                    },
+                    "url": "https://publisher.example/sicar-ac.zip",
+                    "sha256": "a" * 64,
+                    "size_bytes": 123,
+                    "target": "car/AC/AC_AREA_IMOVEL.gpkg",
+                }
+            ],
+        }
+        catalog = _parse_catalog(json.dumps(document).encode())
+
+        status = compare_catalog(catalog, self.root, self.database)[0]
+
+        self.assertEqual(status.state, "inaplicavel")
+        self.assertIn("incompatível", status.detail.lower())
+
+        def unexpected_download(_url, _maximum):
+            raise AssertionError("Pacote incompatível não pode ser baixado.")
+
+        client = CatalogClient(
+            "https://publisher.example/catalog.json",
+            TEST_PUBLISHER_PUBLIC_KEY_PEM,
+            fetcher=unexpected_download,
+        )
+        with self.assertRaisesRegex(UpdateError, "incompatível"):
+            LocalUpdater(self.root, self.database, client).apply(catalog.packages[0])
+
+        compatibility = document["packages"][0]["compatibility"]
+        compatibility["minimum_plugin_version"] = "0.9.5"
+        compatibility["maximum_plugin_version"] = "0.9.5"
+        compatibility["database_schema_version"] = SCHEMA_VERSION + 1
+        database_incompatible = _parse_catalog(json.dumps(document).encode())
+
+        database_status = compare_catalog(
+            database_incompatible, self.root, self.database
+        )[0]
+
+        self.assertEqual(database_status.state, "inaplicavel")
+        self.assertIn("esquema", database_status.detail.lower())
+        with self.assertRaisesRegex(UpdateError, "esquema"):
+            LocalUpdater(self.root, self.database, client).apply(
+                database_incompatible.packages[0]
+            )
+
+    def test_schema_three_rejects_legacy_package_manifest_before_promotion(self):
+        archive = _package(
+            {
+                "id": "fonte_teste",
+                "version": "2026.10.14",
+                "strategy": "replace_file",
+                "provides": ["fonte_teste"],
+                "target": "normativos/fonte.txt",
+                "payloads": {"file": "payload/fonte.txt"},
+            },
+            {"payload/fonte.txt": b"conteudo"},
+        )
+        package = self._package_descriptor(
+            "fonte_teste",
+            "replace_file",
+            archive,
+            version="2026.10.14",
+            target="normativos/fonte.txt",
+            source_date="2026-10-14",
+            source_reference="Fonte oficial de teste",
+            minimum_plugin_version="0.9.5",
+            maximum_plugin_version="0.9.5",
+            database_schema_version=SCHEMA_VERSION,
+            package_manifest_schema_version=1,
+        )
+
+        with self.assertRaisesRegex(UpdateError, "manifesto diverge"):
+            LocalUpdater(
+                self.root,
+                self.database,
+                self._client({package.url: archive}),
+            ).apply(package)
+
+        self.assertFalse((self.root / "normativos" / "fonte.txt").exists())
+
     def test_sicor_package_registers_both_logical_bases_and_multiple_geometry_editions(
         self,
     ):
