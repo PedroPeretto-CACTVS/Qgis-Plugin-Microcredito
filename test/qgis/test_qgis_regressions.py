@@ -25,7 +25,7 @@ QGIS_TEST_SETTINGS = Path(".test-data") / "qsettings" / uuid4().hex
 QGIS_TEST_SETTINGS.mkdir(parents=True, exist_ok=True)
 from database.schema import initialize
 from database.session import connect
-from plugin import batch_window, car_document_window, plugin
+from plugin import batch_window, car_document_window, plugin, update_window
 from plugin.analysis import (
     AnalysisCancelled,
     EnvironmentalAnalyzer,
@@ -68,6 +68,32 @@ class QgisRegressionTests(unittest.TestCase):
 
     def tearDown(self):
         pass  # O pool OGR pode manter arquivos abertos até QgsApplication.exitQgis.
+
+    def test_update_window_retires_abandoned_catalog_without_replacing_it(self):
+        retired_url = (
+            "https://api.github.com/repos/Andre-Marchetti-Cactvs/"
+            "Qgis_plugin-microcredito/contents/updates/homologacao/catalog.json?"
+            "ref=codex%2Fhomologacao-0.9.8-atualizacao-bases"
+        )
+        settings_file = self.root / "settings.ini"
+
+        def isolated_qsettings(*_args, **_kwargs):
+            return QSettings(str(settings_file), QSettings.IniFormat)
+
+        settings = isolated_qsettings()
+        settings.setValue("updates/catalog_url", retired_url)
+        settings.sync()
+
+        with patch.object(update_window, "QSettings", isolated_qsettings):
+            window = update_window.UpdateWindow(Iface())
+
+        self.assertEqual(update_window.DEFAULT_CATALOG_URL, "")
+        self.assertEqual(window.catalog_url.text(), "")
+        self.assertEqual(settings.value("updates/catalog_url", "", type=str), "")
+        self.assertIn(
+            "não contém catálogo de produção assinado", window.test_warning.text()
+        )
+        window.close()
 
     def test_reused_search_window_refreshes_paths_from_qsettings(self):
         class RuntimeSettings:
