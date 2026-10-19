@@ -133,6 +133,7 @@ def build_update_package(
         raise ValueError("Somente import_sicor aceita escopos por payload.")
     payload_members: dict[str, str] = {}
     manifest: dict[str, object] = {
+        "schema_version": 1,
         "id": identifier,
         "version": version,
         "strategy": strategy,

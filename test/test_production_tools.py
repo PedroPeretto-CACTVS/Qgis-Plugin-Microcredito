@@ -88,6 +88,33 @@ def test_signed_catalog_requires_powershell_75_for_date_kind() -> None:
     assert "ConvertFrom-Json -DateKind String" in script
 
 
+def test_catalog_template_declares_evidence_and_runtime_compatibility() -> None:
+    root = Path(__file__).parents[1]
+    template = json.loads(
+        (root / "updates" / "producao" / "catalog.template.example.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    script = (root / "tools" / "build_signed_catalog.ps1").read_text(encoding="utf-8")
+
+    assert template["schema_version"] == 3
+    package = template["packages"][0]
+    assert set(package["source_evidence"]) == {
+        "official_page_url",
+        "official_artifact_url",
+        "checked_at",
+    }
+    assert set(package["compatibility"]) == {
+        "minimum_plugin_version",
+        "maximum_plugin_version",
+        "database_schema_version",
+        "package_manifest_schema_version",
+    }
+    assert "source_evidence" in script
+    assert "compatibility" in script
+    assert "schema_version = 3" in script
+
+
 def test_inventory_reports_publication_blockers_without_exposing_root(
     tmp_path: Path,
 ) -> None:

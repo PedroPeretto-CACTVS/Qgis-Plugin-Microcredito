@@ -26,6 +26,7 @@ def test_build_update_package_records_payload_and_hash(tmp_path: Path) -> None:
     assert len(str(result["sha256"])) == 64
     with zipfile.ZipFile(destination) as archive:
         manifest = json.loads(archive.read("package.json"))
+        assert manifest["schema_version"] == 1
         assert manifest["id"] == "mte"
         assert archive.testzip() is None
 

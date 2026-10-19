@@ -27,8 +27,9 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 
-from database.schema import initialize
+from database.schema import SCHEMA_VERSION, initialize
 from database.session import connect
+from qgis_plugin_microcredito import __version__
 from qgis_plugin_microcredito.application.backup_service import snapshot_database
 from qgis_plugin_microcredito.application.import_service import import_file
 from qgis_plugin_microcredito.application.mte_service import import_mte
@@ -44,8 +45,8 @@ from qgis_plugin_microcredito.infrastructure.downloads import (
     validate_geopackage,
 )
 
-CATALOG_SCHEMA_VERSION = 2
-SUPPORTED_CATALOG_SCHEMA_VERSIONS = frozenset((1, CATALOG_SCHEMA_VERSION))
+CATALOG_SCHEMA_VERSION = 3
+SUPPORTED_CATALOG_SCHEMA_VERSIONS = frozenset((1, 2, CATALOG_SCHEMA_VERSION))
 PACKAGE_STRATEGIES = frozenset(
     ("replace_file", "import_mma_mcr", "import_mte", "import_sicor")
 )
@@ -124,6 +125,13 @@ class CatalogPackage:
     source_reference: str | None = None
     foreign_feature_count: int = 0
     catalog_issued_at: str | None = None
+    official_page_url: str | None = None
+    official_artifact_url: str | None = None
+    source_checked_at: str | None = None
+    minimum_plugin_version: str | None = None
+    maximum_plugin_version: str | None = None
+    database_schema_version: int | None = None
+    package_manifest_schema_version: int | None = None
 
 
 @dataclass(frozen=True)
@@ -217,6 +225,47 @@ def _iso_date(value: object, field: str) -> str:
     except ValueError as exc:
         raise UpdateError(f"{field} deve usar AAAA-MM-DD.") from exc
     return text
+
+
+def _https_url(value: object, field: str) -> str:
+    text = _catalog_text(value, field, 1000)
+    parsed = urllib.parse.urlparse(text)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise UpdateError(f"{field} deve usar URL HTTPS absoluta.")
+    return text
+
+
+def _semantic_version(value: object, field: str) -> tuple[int, int, int]:
+    text = _catalog_text(value, field, 30)
+    match = re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", text)
+    if match is None:
+        raise UpdateError(f"{field} deve usar MAJOR.MINOR.PATCH.")
+    major, minor, patch = match.groups()
+    return int(major), int(minor), int(patch)
+
+
+def _package_compatibility_error(package: CatalogPackage) -> str | None:
+    if package.minimum_plugin_version is None:
+        return None
+    current = _semantic_version(__version__, "Versão atual do plugin")
+    minimum = _semantic_version(
+        package.minimum_plugin_version, "Versão mínima do plugin"
+    )
+    maximum = _semantic_version(
+        package.maximum_plugin_version, "Versão máxima do plugin"
+    )
+    if current < minimum or current > maximum:
+        return (
+            f"Pacote incompatível com a versão {__version__} do plugin; "
+            f"requer de {package.minimum_plugin_version} a "
+            f"{package.maximum_plugin_version}."
+        )
+    if package.database_schema_version != SCHEMA_VERSION:
+        return (
+            f"Pacote incompatível com o esquema {SCHEMA_VERSION} do banco; "
+            f"requer esquema {package.database_schema_version}."
+        )
+    return None
 
 
 def _expected_replace_target(identifier: str) -> str | None:
@@ -317,7 +366,7 @@ def _parse_catalog(payload: bytes) -> Catalog:
     channel: str = "homologacao"
     prepared_by = None
     change_reference = None
-    if schema_version == 2:
+    if schema_version >= 2:
         publication = document.get("publication")
         if not isinstance(publication, dict):
             raise UpdateError("Catálogo de produção sem identificação da publicação.")
@@ -397,7 +446,14 @@ def _parse_catalog(payload: bytes) -> Catalog:
         provides: tuple[str, ...] = (identifier,)
         source_date = None
         source_reference = None
-        if schema_version == 2:
+        official_page_url = None
+        official_artifact_url = None
+        source_checked_at = None
+        minimum_plugin_version = None
+        maximum_plugin_version = None
+        database_schema_version = None
+        package_manifest_schema_version = None
+        if schema_version >= 2:
             raw_provides = raw.get("provides")
             if not isinstance(raw_provides, list) or not raw_provides:
                 raise UpdateError("Pacote sem lista de bases atendidas.")
@@ -440,6 +496,62 @@ def _parse_catalog(payload: bytes) -> Catalog:
                 raise UpdateError(
                     "Exceção de UF só é permitida para pacote estadual do SICAR."
                 )
+            if schema_version >= 3:
+                source_evidence = raw.get("source_evidence")
+                if not isinstance(source_evidence, dict):
+                    raise UpdateError("Pacote sem cadeia de evidência oficial.")
+                official_page_url = _https_url(
+                    source_evidence.get("official_page_url"), "URL oficial da fonte"
+                )
+                artifact_url = source_evidence.get("official_artifact_url")
+                if artifact_url is not None:
+                    official_artifact_url = _https_url(
+                        artifact_url, "URL oficial do arquivo"
+                    )
+                checked_at = _parse_timestamp(
+                    source_evidence.get("checked_at"), "source_evidence.checked_at"
+                )
+                if checked_at > issued_at:
+                    raise UpdateError(
+                        "A consulta da fonte não pode ser posterior à emissão do catálogo."
+                    )
+                source_checked_at = checked_at.isoformat()
+
+                compatibility = raw.get("compatibility")
+                if not isinstance(compatibility, dict):
+                    raise UpdateError("Pacote sem declaração de compatibilidade.")
+                minimum_plugin_version = _catalog_text(
+                    compatibility.get("minimum_plugin_version"),
+                    "Versão mínima do plugin",
+                    30,
+                )
+                maximum_plugin_version = _catalog_text(
+                    compatibility.get("maximum_plugin_version"),
+                    "Versão máxima do plugin",
+                    30,
+                )
+                minimum = _semantic_version(
+                    minimum_plugin_version, "Versão mínima do plugin"
+                )
+                maximum = _semantic_version(
+                    maximum_plugin_version, "Versão máxima do plugin"
+                )
+                if maximum < minimum:
+                    raise UpdateError(
+                        "A versão máxima do plugin é anterior à versão mínima."
+                    )
+                database_schema_version = compatibility.get("database_schema_version")
+                if (
+                    not isinstance(database_schema_version, int)
+                    or isinstance(database_schema_version, bool)
+                    or database_schema_version <= 0
+                ):
+                    raise UpdateError("Versão do esquema do banco inválida.")
+                package_manifest_schema_version = compatibility.get(
+                    "package_manifest_schema_version"
+                )
+                if package_manifest_schema_version != 1:
+                    raise UpdateError("Versão do manifesto do pacote incompatível.")
         else:
             foreign_feature_count = 0
         packages.append(
@@ -459,6 +571,13 @@ def _parse_catalog(payload: bytes) -> Catalog:
                 source_reference,
                 foreign_feature_count,
                 issued_at.isoformat(),
+                official_page_url,
+                official_artifact_url,
+                source_checked_at,
+                minimum_plugin_version,
+                maximum_plugin_version,
+                database_schema_version,
+                package_manifest_schema_version,
             )
         )
     return Catalog(
@@ -1081,7 +1200,10 @@ def compare_catalog(
     status = []
     for package in catalog.packages:
         current = _installed_package_version(package, installed)
-        if older_catalog:
+        compatibility_error = _package_compatibility_error(package)
+        if compatibility_error:
+            state, detail = "inaplicavel", compatibility_error
+        elif older_catalog:
             state, detail = (
                 "inaplicavel",
                 "Catálogo assinado anterior ao catálogo mais recente já instalado; "
@@ -1303,6 +1425,14 @@ class LocalUpdater:
                 manifest = json.loads(zipped.read("package.json").decode("utf-8"))
                 if not isinstance(manifest, dict):
                     raise UpdateError("Manifesto do pacote inválido.")
+                if (
+                    package.package_manifest_schema_version is not None
+                    and manifest.get("schema_version")
+                    != package.package_manifest_schema_version
+                ):
+                    raise UpdateError(
+                        "Versão do manifesto diverge do catálogo assinado."
+                    )
                 for key, expected in (
                     ("id", package.identifier),
                     ("version", package.version),
@@ -1622,6 +1752,9 @@ class LocalUpdater:
         os.replace(staged_database, self.database)
 
     def apply(self, package: CatalogPackage) -> UpdateStatus:
+        compatibility_error = _package_compatibility_error(package)
+        if compatibility_error:
+            raise UpdateError(compatibility_error)
         self._emit_progress(0, "Iniciando atualização local…")
         lock = _acquire_update_lock(self.data_root)
         # Doze caracteres aleatórios evitam colisões e preservam margem para

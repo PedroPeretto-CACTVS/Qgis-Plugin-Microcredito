@@ -40,11 +40,19 @@ function Require-Identifier($Value, [string]$Field) {
     return $text
 }
 
-function Require-HttpsUrl($Value) {
-    $text = Require-String $Value "url"
+function Require-HttpsUrl($Value, [string]$Field = "url") {
+    $text = Require-String $Value $Field 1000
     $uri = $null
     if (-not [Uri]::TryCreate($text, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne "https" -or [string]::IsNullOrWhiteSpace($uri.Host)) {
-        throw "Cada pacote deve ter URL HTTPS absoluta."
+        throw "$Field deve usar URL HTTPS absoluta."
+    }
+    return $text
+}
+
+function Require-Version($Value, [string]$Field) {
+    $text = Require-String $Value $Field 30
+    if ($text -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+        throw "$Field deve usar MAJOR.MINOR.PATCH."
     }
     return $text
 }
@@ -69,7 +77,7 @@ function Require-Date($Value, [string]$Field) {
 }
 
 $template = Get-Content -LiteralPath $TemplatePath -Raw -Encoding UTF8 | ConvertFrom-Json -DateKind String
-if ($template.schema_version -ne 2) { throw "O processo formal exige schema_version 2." }
+if ($template.schema_version -ne 3) { throw "O processo formal exige schema_version 3." }
 $issuedAt = Require-DateTime $template.issued_at "issued_at"
 $expiresAt = Require-DateTime $template.expires_at "expires_at"
 if ([DateTimeOffset]::Parse($expiresAt) -le [DateTimeOffset]::Parse($issuedAt)) { throw "expires_at deve ser posterior a issued_at." }
@@ -95,10 +103,34 @@ foreach ($item in @($template.packages)) {
         throw "provides deve ser único e conter o id do pacote: $identifier"
     }
     $size = [int64](Get-Item -LiteralPath $archivePath).Length
-    $url = Require-HttpsUrl $item.url
+    $url = Require-HttpsUrl $item.url "url"
     if ($url -match '^https://api\.github\.com/.*/releases/assets/' -and $size -ge 2147483648) {
         throw "Ativo acima do limite de 2 GiB do GitHub Release: $archivePath"
     }
+    if ($null -eq $item.source_evidence) { throw "Bloco source_evidence ausente: $identifier" }
+    $officialPageUrl = Require-HttpsUrl $item.source_evidence.official_page_url "source_evidence.official_page_url"
+    $sourceCheckedAt = Require-DateTime $item.source_evidence.checked_at "source_evidence.checked_at"
+    if ([DateTimeOffset]::Parse($sourceCheckedAt) -gt [DateTimeOffset]::Parse($issuedAt)) {
+        throw "source_evidence.checked_at não pode ser posterior a issued_at."
+    }
+    $sourceEvidence = [ordered]@{
+        official_page_url = $officialPageUrl
+        checked_at = $sourceCheckedAt
+    }
+    if ($item.source_evidence.PSObject.Properties.Name -contains "official_artifact_url" -and
+        -not [string]::IsNullOrWhiteSpace([string]$item.source_evidence.official_artifact_url)) {
+        $sourceEvidence.official_artifact_url = Require-HttpsUrl $item.source_evidence.official_artifact_url "source_evidence.official_artifact_url"
+    }
+    if ($null -eq $item.compatibility) { throw "Bloco compatibility ausente: $identifier" }
+    $minimumPluginVersion = Require-Version $item.compatibility.minimum_plugin_version "compatibility.minimum_plugin_version"
+    $maximumPluginVersion = Require-Version $item.compatibility.maximum_plugin_version "compatibility.maximum_plugin_version"
+    if ([version]$maximumPluginVersion -lt [version]$minimumPluginVersion) {
+        throw "A versão máxima do plugin é anterior à versão mínima."
+    }
+    $databaseSchemaVersion = [int]$item.compatibility.database_schema_version
+    if ($databaseSchemaVersion -le 0) { throw "compatibility.database_schema_version inválido." }
+    $packageManifestSchemaVersion = [int]$item.compatibility.package_manifest_schema_version
+    if ($packageManifestSchemaVersion -ne 1) { throw "compatibility.package_manifest_schema_version incompatível." }
     $entry = [ordered]@{
         id = $identifier
         label = Require-String $item.label "label" 160
@@ -107,6 +139,13 @@ foreach ($item in @($template.packages)) {
         provides = $provides
         source_date = Require-Date $item.source_date "source_date"
         source_reference = Require-String $item.source_reference "source_reference"
+        source_evidence = $sourceEvidence
+        compatibility = [ordered]@{
+            minimum_plugin_version = $minimumPluginVersion
+            maximum_plugin_version = $maximumPluginVersion
+            database_schema_version = $databaseSchemaVersion
+            package_manifest_schema_version = $packageManifestSchemaVersion
+        }
         url = $url
         sha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
         size_bytes = $size
@@ -133,7 +172,7 @@ foreach ($item in @($template.packages)) {
 }
 
 $catalog = [ordered]@{
-    schema_version = 2
+    schema_version = 3
     issued_at = $issuedAt
     expires_at = $expiresAt
     publication = [ordered]@{

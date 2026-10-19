@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "issued_at": "2026-09-23T12:00:00-03:00",
   "expires_at": "2026-10-23T12:00:00-03:00",
   "publication": {
@@ -16,6 +16,17 @@
       "provides": ["mte"],
       "source_date": "AAAA-MM-DD",
       "source_reference": "Referência oficial da publicação MTE",
+      "source_evidence": {
+        "official_page_url": "https://www.gov.br/trabalho-e-emprego/",
+        "official_artifact_url": "https://www.gov.br/trabalho-e-emprego/arquivo-oficial.csv",
+        "checked_at": "AAAA-MM-DDThh:mm:ss-03:00"
+      },
+      "compatibility": {
+        "minimum_plugin_version": "0.9.5",
+        "maximum_plugin_version": "0.9.5",
+        "database_schema_version": 4,
+        "package_manifest_schema_version": 1
+      },
       "url": "https://api.github.com/repos/PedroPeretto-CACTVS/Qgis-Plugin-Microcredito/releases/assets/ID_DO_ASSET",
       "archive_path": "updates/producao/mte-AAAA.MM.DD.zip",
       "sha256": "PREENCHER_SHA256_HEXADECIMAL_DE_64_CARACTERES",
