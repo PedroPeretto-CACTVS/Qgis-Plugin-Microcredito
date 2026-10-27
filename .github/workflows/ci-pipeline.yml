@@ -4,6 +4,12 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   quality:
@@ -24,3 +30,70 @@ jobs:
         run: uv run mypy src/qgis_plugin_microcredito src/database src/cli src/installer
       - name: Tests
         run: uv run pytest -m "not qgis"
+
+  tdd-contract:
+    name: TDD contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce tests for source changes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                ...context.repo,
+                pull_number: context.payload.pull_request.number,
+              },
+            );
+            const paths = files.map((file) => file.filename);
+            const sourceChanged = paths.some((path) => path.startsWith("src/"));
+            const testsChanged = paths.some((path) => path.startsWith("test/"));
+
+            if (sourceChanged && !testsChanged) {
+              core.setFailed("Source changes require test changes");
+            }
+
+  code-review:
+    name: Code review
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require approval for current HEAD
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pullRequest = context.payload.pull_request;
+            const headSha = pullRequest.head.sha;
+            const reviews = await github.paginate(
+              github.rest.pulls.listReviews,
+              {
+                ...context.repo,
+                pull_number: pullRequest.number,
+              },
+            );
+            const latestByReviewer = new Map();
+
+            for (const review of reviews) {
+              if (!review.user || review.state === "PENDING") {
+                continue;
+              }
+              const previous = latestByReviewer.get(review.user.login);
+              if (!previous || review.id > previous.id) {
+                latestByReviewer.set(review.user.login, review);
+              }
+            }
+
+            const approved = [...latestByReviewer.values()].some(
+              (review) =>
+                review.state === "APPROVED" &&
+                review.commit_id === headSha &&
+                review.user.login !== pullRequest.user.login,
+            );
+
+            if (!approved) {
+              core.setFailed("Current HEAD requires an approving review");
+            }
