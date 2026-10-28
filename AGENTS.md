@@ -45,8 +45,8 @@ Follow this workflow whenever the user asks for branches, commits, or pull reque
 
 1. Create a new branch for the feature
 2. Understand the current codebase structure and business rules before editing anything
-3. Always implement using skill `tdd`
-4. Review the feature implemented with skill `code-review`
+3. Always implement using skill `$tdd`
+4. Review the feature implemented with skill `$code-review`
 5. Check if there are no errors using `make typecheck format lint test`
 6. Commit the changes attomically, using SemVer patterns
 7. Push the code and create a Pull Request
