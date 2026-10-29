@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+from pypdf import PdfReader
 from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsFeature,
@@ -296,6 +297,18 @@ class QgisRegressionTests(unittest.TestCase):
                 }
             ],
         }
+
+    def test_report_header_identifies_analyzed_car(self) -> None:
+        car = "RR-0000000-00000000000000000000000000000000"
+        pdf, audit = write_report(
+            {**self.analysis(), "car": car}, self.root / "header.pdf"
+        )
+
+        first_page = " ".join(PdfReader(str(pdf)).pages[0].extract_text().split())
+        header, separator, _body = first_page.partition("Resumo da pré-análise")
+        self.assertTrue(separator, first_page)
+        self.assertIn(f"CAR analisado: {car}", header)
+        self.assertEqual(json.loads(audit.read_text(encoding="utf-8"))["car"], car)
 
     def test_mte_documents_include_initial_search_and_owner_without_duplicates(self):
         associated = [{"documento_normalizado": "12345678901"}]

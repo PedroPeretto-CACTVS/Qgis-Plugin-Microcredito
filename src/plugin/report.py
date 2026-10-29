@@ -1166,6 +1166,10 @@ def _write_report_files(
     story = [
         Paragraph("Relatório de pré-análise socioambiental", s["ReportTitle"]),
         Paragraph(
+            f"<b>CAR analisado:</b> {_escape(payload.get('car'))}",
+            s["BodySmall"],
+        ),
+        Paragraph(
             f"Apoio à decisão técnica de crédito rural | Emitido em {_escape(payload['emitido_em'])}",
             s["Foot"],
         ),
