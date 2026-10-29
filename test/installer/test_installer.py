@@ -24,15 +24,34 @@ from qgis_plugin_microcredito.infrastructure.downloads import validate_geopackag
 
 
 @pytest.fixture(autouse=True)
-def isolated_installation_environment(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+def isolated_installation_environment(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> dict[str, str]:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
     monkeypatch.setenv("APPDATA", str(tmp_path / "roaming-app-data"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    registry_values: dict[str, str] = {}
     if sys.platform == "win32":
+        import winreg
 
-        def reject_registry_write(*args: object, **kwargs: object) -> None:
-            raise AssertionError("O instalador não deve gravar caminhos no registro.")
+        handle = object()
 
-        monkeypatch.setattr("winreg.CreateKey", reject_registry_write)
+        def create_key(root: object, name: str) -> object:
+            assert root == winreg.HKEY_CURRENT_USER
+            assert name == r"Software\Cactvs\CARMicrocredito"
+            return handle
+
+        def set_value(
+            key: object, name: str, reserved: int, kind: int, value: str
+        ) -> None:
+            assert key is handle and kind == winreg.REG_SZ
+            assert name in {"database", "car_base"}
+            registry_values[name] = value
+
+        monkeypatch.setattr(winreg, "CreateKey", create_key)
+        monkeypatch.setattr(winreg, "SetValueEx", set_value)
+        monkeypatch.setattr(winreg, "CloseKey", lambda key: None)
+    return registry_values
 
 
 def test_repository_root_contains_plugin_sources() -> None:
@@ -211,3 +230,27 @@ def test_migration_and_installation_refuse_running_qgis(
         install_package(tmp_path / "package", profiles_root=tmp_path / "profiles")
     assert not default_local_data_paths().root.exists()
     assert not (tmp_path / "profiles").exists()
+
+
+def test_skip_settings_preserves_paths_and_does_not_provision_bases(
+    tmp_path: Path, isolated_installation_environment: dict[str, str]
+) -> None:
+    package = _write_package(tmp_path)
+    previous = {"database": "previous-database", "car_base": "previous-car"}
+    isolated_installation_environment.update(previous)
+    config_file = Path.home() / ".config/Cactvs/CARMicrocredito.conf"
+    config_file.parent.mkdir(parents=True)
+    original_config = "[General]\ndatabase=previous-database\ncar_base=previous-car\n"
+    config_file.write_text(original_config, encoding="utf-8")
+
+    installed = install_package(
+        package,
+        profiles_root=tmp_path / "profiles",
+        skip_settings=True,
+        skip_qgis_check=True,
+    )
+
+    assert installed[0].is_dir()
+    assert not default_local_data_paths().root.exists()
+    assert isolated_installation_environment == previous
+    assert config_file.read_text(encoding="utf-8") == original_config

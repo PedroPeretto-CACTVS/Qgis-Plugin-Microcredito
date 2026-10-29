@@ -9,7 +9,12 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from installer.constants import PLUGIN_VERSION, QGIS_PROCESS_NAMES
+from installer.constants import (
+    PLUGIN_VERSION,
+    QGIS_PROCESS_NAMES,
+    SETTINGS_APP,
+    SETTINGS_ORG,
+)
 from installer.local_bases import install_local_bases
 from installer.verify import verify_package
 
@@ -53,6 +58,31 @@ def _plugin_source(package_root: Path) -> tuple[Path, str]:
     return candidates[0], candidates[0].name
 
 
+def _write_settings(database: Path, car_base: Path) -> None:
+    """Bridge legacy screens to fixed bases until they adopt LocalDataPaths."""
+    database_value = database.resolve().as_posix()
+    car_value = car_base.resolve().as_posix()
+    if sys.platform == "win32":
+        import winreg
+
+        key = winreg.CreateKey(
+            winreg.HKEY_CURRENT_USER, rf"Software\{SETTINGS_ORG}\{SETTINGS_APP}"
+        )
+        try:
+            winreg.SetValueEx(key, "database", 0, winreg.REG_SZ, database_value)
+            winreg.SetValueEx(key, "car_base", 0, winreg.REG_SZ, car_value)
+        finally:
+            winreg.CloseKey(key)
+        return
+    config_dir = Path.home() / ".config" / SETTINGS_ORG
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_path = config_dir / f"{SETTINGS_APP}.conf"
+    config_path.write_text(
+        f"[General]\ndatabase={database_value}\ncar_base={car_value}\n",
+        encoding="utf-8",
+    )
+
+
 def install_package(
     package_root: str | Path,
     *,
@@ -63,8 +93,8 @@ def install_package(
 ) -> list[Path]:
     """Install plugin code and initialize the version-independent data directory.
 
-    The legacy ``skip_settings`` flag now skips data initialization; installation
-    never persists database or CAR paths to QGIS settings.
+    The legacy ``skip_settings`` flag skips data initialization and path settings.
+    Until consultation screens use LocalDataPaths, point them at fixed storage.
     """
     root = Path(package_root).resolve()
     if not skip_qgis_check and qgis_is_running():
@@ -73,8 +103,11 @@ def install_package(
         )
     verify_package(root)
     plugin_source, plugin_folder = _plugin_source(root)
-    if not skip_settings:
+    local_paths = (
         install_local_bases(root / "arquivos" / "dados" / "car_microcredito.db")
+        if not skip_settings
+        else None
+    )
     profiles_dir = Path(profiles_root) if profiles_root else default_profiles_root()
     profiles_dir.mkdir(parents=True, exist_ok=True)
     profiles = [item for item in profiles_dir.iterdir() if item.is_dir()]
@@ -111,4 +144,6 @@ def install_package(
             if moved and backup.exists():
                 backup.rename(destination)
             raise
+    if local_paths is not None:
+        _write_settings(local_paths.database, local_paths.car)
     return installed
