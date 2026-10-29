@@ -286,6 +286,10 @@ class BatchWindow(QDialog):
     def validate_spreadsheet(self):
         try:
             spreadsheet = Path(self.xlsx_path.text().strip())
+            if not spreadsheet.is_file():
+                raise ValueError(
+                    "Selecione uma planilha Excel (.xlsx) existente antes de validar."
+                )
             before = file_sha256(spreadsheet)
             self.rows = read_batch_xlsx(spreadsheet)
             if before != file_sha256(spreadsheet):
