@@ -9,6 +9,7 @@ from contextlib import closing
 from pathlib import Path
 
 from database.session import connect
+from installer.constants import UFS
 from installer.package_build import validate_sources
 from installer.verify import file_sha256
 from qgis_plugin_microcredito.application.backup_service import snapshot_database
@@ -16,7 +17,10 @@ from qgis_plugin_microcredito.application.local_data_paths import (
     LocalDataPaths,
     default_local_data_paths,
 )
-from qgis_plugin_microcredito.infrastructure.downloads import validate_geopackage
+from qgis_plugin_microcredito.infrastructure.downloads import (
+    geopackage_foreign_feature_count,
+    validate_geopackage,
+)
 from qgis_plugin_microcredito.infrastructure.updates import (
     _acquire_update_lock,
     _release_update_lock,
@@ -138,7 +142,11 @@ def install_local_bases(
         validate_sources(staging)
         for folder in ("car", "ambientais"):
             for gpkg in (staging / folder).rglob("*.gpkg"):
-                validate_geopackage(gpkg)
+                if folder == "car" and gpkg.parent.name in UFS:
+                    # Inspect CAR fields without reapplying publication UF quotas.
+                    geopackage_foreign_feature_count(gpkg, gpkg.parent.name)
+                else:
+                    validate_geopackage(gpkg)
         _activate_staged_bases(staging, paths)
     if progress:
         progress("Bases validadas e ativadas na pasta fixa.")

@@ -21,7 +21,7 @@ from qgis_plugin_microcredito.infrastructure.updates import (
 )
 
 
-def dataset(root: Path) -> Path:
+def dataset(root: Path, *, car_identifier: bool = True) -> Path:
     database = root / "homologacao-R2.db"
     connection = connect(database)
     initialize(connection)
@@ -43,7 +43,34 @@ def dataset(root: Path) -> Path:
                 INSERT INTO gpkg_spatial_ref_sys VALUES (4674);
                 INSERT INTO area VALUES (1);
             """)
+            if path.parent.name in UFS and car_identifier:
+                gpkg.execute("ALTER TABLE area ADD COLUMN cod_imovel TEXT")
+                gpkg.execute(
+                    "UPDATE area SET cod_imovel = ?",
+                    (f"{path.parent.name}-0000000-00000000000000000000000000000001",),
+                )
+                gpkg.commit()
     return database
+
+
+def test_migration_rejects_car_without_identifier_before_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    source = dataset(tmp_path / "kit-R2", car_identifier=False)
+    before = {
+        path.relative_to(source.parent): path.read_bytes()
+        for path in source.parent.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(ValueError, match="Identificador CAR ausente"):
+        install_local_bases(source)
+
+    assert not default_local_data_paths().root.exists()
+    assert before == {
+        relative: (source.parent / relative).read_bytes() for relative in before
+    }
 
 
 def test_migration_copies_one_coherent_set_and_survives_source_relocation(
@@ -85,6 +112,26 @@ def test_new_plugin_install_preserves_existing_fixed_bases(
         for p in installed.root.rglob("*")
         if p.is_file()
     }
+
+
+def test_migration_preserves_existing_car_with_foreign_uf_features(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    source = dataset(tmp_path / "kit-R2")
+    car = source.parent / "car" / "AC" / "AC_AREA_IMOVEL.gpkg"
+    with closing(sqlite3.connect(car)) as connection:
+        connection.execute(
+            "INSERT INTO area (id, cod_imovel) VALUES (?, ?)",
+            (2, "SP-0000000-00000000000000000000000000000002"),
+        )
+        connection.commit()
+    before = car.read_bytes()
+
+    installed = install_local_bases(source)
+
+    assert (installed.car / "AC" / car.name).read_bytes() == before
+    assert car.read_bytes() == before
 
 
 def test_failed_migration_does_not_activate_partial_bases_or_change_source(
