@@ -103,14 +103,16 @@ def _readme(variant: str) -> bytes:
     lines = [
         title,
         "",
-        "1. Extraia o ZIP inteiro para uma pasta fixa.",
+        "1. Extraia o ZIP inteiro para uma pasta de instalação.",
         "2. Não execute os arquivos de dentro do ZIP.",
         "3. Feche todas as janelas do QGIS.",
         "4. Execute: car-microcredito-installer verify .",
         "5. Execute: car-microcredito-installer install .",
         "6. Abra o QGIS e ative o complemento na seção Instalados.",
         "",
-        "Não mova a pasta depois da instalação. Se mover, execute o instalador novamente.",
+        "As bases ficam em %LOCALAPPDATA%\\Cactvs\\BasesPlugin no Windows.",
+        "Após instalar, a pasta extraída pode ser movida ou removida.",
+        "Reinstalar o plugin preserva as bases existentes na pasta fixa.",
         "QGIS mínimo: 3.40",
     ]
     return ("\r\n".join(lines) + "\r\n").encode("utf-8-sig")

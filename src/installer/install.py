@@ -15,6 +15,7 @@ from installer.constants import (
     SETTINGS_APP,
     SETTINGS_ORG,
 )
+from installer.local_bases import install_local_bases
 from installer.verify import verify_package
 
 
@@ -57,7 +58,8 @@ def _plugin_source(package_root: Path) -> tuple[Path, str]:
     return candidates[0], candidates[0].name
 
 
-def _write_settings(database: Path, car_base: Path) -> None:
+def configure_data_paths(database: Path, car_base: Path) -> None:
+    """Bridge legacy screens to fixed bases until they adopt LocalDataPaths."""
     database_value = database.resolve().as_posix()
     car_value = car_base.resolve().as_posix()
     if sys.platform == "win32":
@@ -89,6 +91,11 @@ def install_package(
     skip_qgis_check: bool = False,
     profile: str | None = None,
 ) -> list[Path]:
+    """Install plugin code and initialize the version-independent data directory.
+
+    The legacy ``skip_settings`` flag skips data initialization and path settings.
+    Until consultation screens use LocalDataPaths, point them at fixed storage.
+    """
     root = Path(package_root).resolve()
     if not skip_qgis_check and qgis_is_running():
         raise RuntimeError(
@@ -96,6 +103,11 @@ def install_package(
         )
     verify_package(root)
     plugin_source, plugin_folder = _plugin_source(root)
+    local_paths = (
+        install_local_bases(root / "arquivos" / "dados" / "car_microcredito.db")
+        if not skip_settings
+        else None
+    )
     profiles_dir = Path(profiles_root) if profiles_root else default_profiles_root()
     profiles_dir.mkdir(parents=True, exist_ok=True)
     profiles = [item for item in profiles_dir.iterdir() if item.is_dir()]
@@ -132,14 +144,6 @@ def install_package(
             if moved and backup.exists():
                 backup.rename(destination)
             raise
-    if not skip_settings:
-        database = root / "arquivos" / "dados" / "car_microcredito.db"
-        car_base = root / "arquivos" / "dados" / "car"
-        _write_settings(database, car_base)
-    for relative in (
-        "arquivos/output/pdf",
-        "arquivos/output/lotes",
-        "arquivos/resultados",
-    ):
-        (root / relative).mkdir(parents=True, exist_ok=True)
+    if local_paths is not None:
+        configure_data_paths(local_paths.database, local_paths.car)
     return installed

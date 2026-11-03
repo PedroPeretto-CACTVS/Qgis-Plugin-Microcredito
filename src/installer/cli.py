@@ -7,7 +7,8 @@ from typing import Annotated
 import typer
 
 from installer.constants import PLUGIN_VERSION
-from installer.install import install_package
+from installer.install import configure_data_paths, install_package, qgis_is_running
+from installer.local_bases import install_local_bases
 from installer.package_build import build_package
 from installer.plugin_build import main as plugin_build_main
 from installer.update_package import (
@@ -34,11 +35,17 @@ def verify(package: Path) -> None:
 def install(
     package: Path,
     profiles_root: Annotated[Path | None, typer.Option("--profiles-root")] = None,
-    skip_settings: Annotated[bool, typer.Option("--skip-settings")] = False,
+    skip_settings: Annotated[
+        bool,
+        typer.Option(
+            "--skip-settings",
+            help="Opção legada: instala somente o plugin, sem inicializar as bases fixas.",
+        ),
+    ] = False,
     skip_qgis_check: Annotated[bool, typer.Option("--skip-qgis-check")] = False,
     profile: Annotated[str | None, typer.Option("--profile")] = None,
 ) -> None:
-    """Instala o plugin em perfis QGIS e grava database/car_base."""
+    """Instala o plugin e inicializa a pasta fixa de bases do usuário."""
     destinations = install_package(
         package,
         profiles_root=profiles_root,
@@ -52,6 +59,17 @@ def install(
     typer.echo(
         "Abra o QGIS, ative o complemento em Instalados e use o menu Complementos."
     )
+
+
+@app.command("migrate-bases")
+def migrate_bases(source_database: Path) -> None:
+    """Copia banco, CAR e ambientais para a pasta fixa, preservando a origem."""
+    if qgis_is_running():
+        typer.echo("Feche todas as janelas do QGIS antes de migrar as bases.", err=True)
+        raise typer.Exit(code=1)
+    paths = install_local_bases(source_database, progress=typer.echo)
+    configure_data_paths(paths.database, paths.car)
+    typer.echo(f"Bases Plugin disponíveis em: {paths.root}")
 
 
 @app.command("plugin-build")
