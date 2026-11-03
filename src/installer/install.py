@@ -58,7 +58,7 @@ def _plugin_source(package_root: Path) -> tuple[Path, str]:
     return candidates[0], candidates[0].name
 
 
-def _write_settings(database: Path, car_base: Path) -> None:
+def configure_data_paths(database: Path, car_base: Path) -> None:
     """Bridge legacy screens to fixed bases until they adopt LocalDataPaths."""
     database_value = database.resolve().as_posix()
     car_value = car_base.resolve().as_posix()
@@ -145,5 +145,5 @@ def install_package(
                 backup.rename(destination)
             raise
     if local_paths is not None:
-        _write_settings(local_paths.database, local_paths.car)
+        configure_data_paths(local_paths.database, local_paths.car)
     return installed

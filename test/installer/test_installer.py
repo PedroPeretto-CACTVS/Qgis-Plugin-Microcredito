@@ -191,8 +191,10 @@ def test_reinstalling_plugin_preserves_existing_local_bases(tmp_path: Path) -> N
     }
 
 
-def test_migrate_bases_command_reports_fixed_directory_and_progress(
-    tmp_path: Path, monkeypatch: MonkeyPatch
+def test_migration_command_points_legacy_paths_to_fixed_bases_after_source_moves(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    isolated_installation_environment: dict[str, str],
 ) -> None:
     package = _write_package(tmp_path)
     source = package / "arquivos" / "dados" / "car_microcredito.db"
@@ -209,6 +211,19 @@ def test_migrate_bases_command_reports_fixed_directory_and_progress(
     assert str(paths.root) in result.output
     assert "Copiando" in result.output
     assert paths.database.is_file()
+    package.rename(tmp_path / "package-moved")
+    expected = {
+        "database": paths.database.resolve().as_posix(),
+        "car_base": paths.car.resolve().as_posix(),
+    }
+    if sys.platform == "win32":
+        assert isolated_installation_environment == expected
+    else:
+        settings_file = Path.home() / ".config/Cactvs/CARMicrocredito.conf"
+        assert settings_file.is_file()
+        content = settings_file.read_text(encoding="utf-8")
+        assert f"database={expected['database']}" in content
+        assert f"car_base={expected['car_base']}" in content
 
 
 def test_migration_and_installation_refuse_running_qgis(

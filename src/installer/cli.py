@@ -7,7 +7,7 @@ from typing import Annotated
 import typer
 
 from installer.constants import PLUGIN_VERSION
-from installer.install import install_package, qgis_is_running
+from installer.install import configure_data_paths, install_package, qgis_is_running
 from installer.local_bases import install_local_bases
 from installer.package_build import build_package
 from installer.plugin_build import main as plugin_build_main
@@ -68,6 +68,7 @@ def migrate_bases(source_database: Path) -> None:
         typer.echo("Feche todas as janelas do QGIS antes de migrar as bases.", err=True)
         raise typer.Exit(code=1)
     paths = install_local_bases(source_database, progress=typer.echo)
+    configure_data_paths(paths.database, paths.car)
     typer.echo(f"Bases Plugin disponíveis em: {paths.root}")
 
 

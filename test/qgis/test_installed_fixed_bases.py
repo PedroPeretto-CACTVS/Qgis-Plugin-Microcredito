@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from typer.testing import CliRunner
 
 pytest.importorskip("qgis.core")
 pytestmark = pytest.mark.qgis
@@ -17,6 +19,7 @@ pytestmark = pytest.mark.qgis
 from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtWidgets import QMessageBox, QPushButton
 
+from installer.cli import app as installer_app
 from installer.install import install_package
 from plugin import plugin
 from qgis_plugin_microcredito.application.local_data_paths import (
@@ -33,9 +36,13 @@ class Iface:
         return None
 
 
+@pytest.mark.parametrize("provisioning_command", ["install", "migrate"])
 @pytest.mark.parametrize("prior_settings", ["new", "stale"])
 def test_installed_fixed_bases_are_queried_after_package_moves(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prior_settings: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prior_settings: str,
+    provisioning_command: str,
 ) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
@@ -98,11 +105,25 @@ def test_installed_fixed_bases_are_queried_after_package_moves(
     ).hexdigest()
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    installed = install_package(
-        package, profiles_root=tmp_path / "profiles", skip_qgis_check=True
-    )
+    if provisioning_command == "install":
+        installed = install_package(
+            package, profiles_root=tmp_path / "profiles", skip_qgis_check=True
+        )
+        assert installed[0].is_dir()
+    else:
+        # Model the closed-QGIS process-list boundary; queries and migration run real.
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(
+                "tasklist", 0, stdout=""
+            ),
+        )
+        result = CliRunner().invoke(
+            installer_app, ["migrate-bases", str(source_database)]
+        )
+        assert result.exit_code == 0, result.output
     package.rename(tmp_path / "package-moved")
-    assert installed[0].is_dir()
     paths = default_local_data_paths()
     window = plugin.SearchWindow(Iface())
     try:
