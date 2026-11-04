@@ -14,7 +14,7 @@ from qgis.PyQt.QtWidgets import QGroupBox, QLabel, QLineEdit, QMessageBox, QPush
 
 from database.schema import initialize
 from database.session import connect
-from plugin import batch_window, car_document_window, plugin
+from plugin import batch_window, car_document_window, plugin, update_window
 
 
 class Iface:
@@ -37,7 +37,7 @@ def _window_context(tmp_path: Path):
     stack.enter_context(
         patch.dict(os.environ, {"LOCALAPPDATA": str(tmp_path / "local")})
     )
-    for module in (plugin, batch_window, car_document_window):
+    for module in (plugin, batch_window, car_document_window, update_window):
         stack.enter_context(patch.object(module, "QSettings", settings))
     return stack, settings
 
@@ -56,13 +56,14 @@ def test_windows_offer_work_fields_without_base_directory_controls(
         search = plugin.SearchWindow(Iface())
         batch = batch_window.BatchWindow(Iface(), plugin._load_core)
         document = car_document_window.CarDocumentWindow(Iface(), plugin._load_core)
+        updates = update_window.UpdateWindow(Iface())
         try:
             search.reload_local_paths()
             expected_root = tmp_path / "local" / "Cactvs" / "BasesPlugin"
             expected_database = str(expected_root / "car_microcredito.db")
             expected_car = str(expected_root / "car")
 
-            for window in (search, batch, document):
+            for window in (search, batch, document, updates):
                 labels = {label.text() for label in window.findChildren(QLabel)}
                 assert "Banco SQLite" not in labels
                 assert "Polígonos do CAR" not in labels
@@ -79,8 +80,9 @@ def test_windows_offer_work_fields_without_base_directory_controls(
             assert (
                 search.car.placeholderText() == "Número do CAR informado pelo cliente"
             )
+            assert not updates.release_path.isReadOnly()
         finally:
-            for window in (document, batch, search):
+            for window in (updates, document, batch, search):
                 window.close()
 
 
@@ -184,3 +186,36 @@ def test_consultation_connections_are_readonly(tmp_path: Path) -> None:
             batch.close()
             document.close()
             search.close()
+
+
+def test_update_failure_never_claims_that_nothing_was_modified(tmp_path: Path) -> None:
+    context, _settings_factory = _window_context(tmp_path)
+    with context:
+        window = update_window.UpdateWindow(Iface())
+        message = (
+            "A atualização falhou e nem todas as bases puderam ser restauradas; "
+            "interrompa o uso do plugin."
+        )
+        try:
+            with patch.object(QMessageBox, "warning") as warning:
+                window._worker_failed(message)
+            assert "Nenhuma base foi modificada" not in window.status_label.text()
+            assert message in window.status_label.text()
+            assert warning.call_args.args[2] == message
+        finally:
+            window.close()
+
+
+def test_update_window_accepts_fixed_location_before_database_exists(
+    tmp_path: Path,
+) -> None:
+    context, _settings_factory = _window_context(tmp_path)
+    with context:
+        window = update_window.UpdateWindow(Iface())
+        try:
+            expected_root = tmp_path / "local" / "Cactvs" / "BasesPlugin"
+            expected = expected_root / "car_microcredito.db"
+            assert window._database_path() == expected.resolve()
+            assert not expected_root.exists()
+        finally:
+            window.close()
