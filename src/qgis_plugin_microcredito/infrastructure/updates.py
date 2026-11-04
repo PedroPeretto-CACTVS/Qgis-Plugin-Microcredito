@@ -353,7 +353,7 @@ def verify_catalog_signature(
         raise UpdateError("Assinatura do catálogo inválida.")
 
 
-def _parse_catalog(payload: bytes) -> Catalog:
+def _parse_catalog(payload: bytes, *, allow_bundle_urls: bool = False) -> Catalog:
     try:
         document = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -415,8 +415,20 @@ def _parse_catalog(payload: bytes) -> Catalog:
             raise UpdateError("Estratégia de pacote não permitida.")
         strategy_text = strategy
         parsed_url = urllib.parse.urlparse(str(url or ""))
-        if parsed_url.scheme != "https" or not parsed_url.hostname:
-            raise UpdateError("URL do pacote deve usar HTTPS.")
+        is_https = parsed_url.scheme == "https" and bool(parsed_url.hostname)
+        is_bundle = (
+            allow_bundle_urls
+            and parsed_url.scheme == "carbases"
+            and parsed_url.netloc == "packages"
+            and parsed_url.path == f"/{identifier}.zip"
+            and not parsed_url.params
+            and not parsed_url.query
+            and not parsed_url.fragment
+        )
+        if not (is_https or is_bundle):
+            raise UpdateError(
+                "URL do pacote deve usar HTTPS ou apontar para o próprio Bases Plugin."
+            )
         if not isinstance(digest, str) or not re.fullmatch(
             r"[0-9a-f]{64}", digest.lower()
         ):
@@ -830,6 +842,170 @@ class CatalogClient:
         )
         verify_catalog_signature(payload, signature, self.public_key_pem)
         return _parse_catalog(payload)
+
+
+class BaseReleaseBundle:
+    """Lê uma publicação offline assinada sem confiar em nomes externos.
+
+    O arquivo ``.carbases`` contém somente o catálogo, sua assinatura e um ZIP
+    por pacote declarado. O catálogo continua sendo a fonte de verdade: nome,
+    tamanho e SHA-256 de cada pacote são conferidos antes de qualquer base ser
+    modificada.
+    """
+
+    CATALOG_MEMBER = "catalog.json"
+    SIGNATURE_MEMBER = "catalog.json.sig"
+
+    def __init__(
+        self,
+        path: str | Path,
+        public_key_pem: str,
+    ) -> None:
+        self.path = Path(path).resolve()
+        self.public_key_pem = public_key_pem
+        if not self.path.is_file():
+            raise UpdateError("Selecione um arquivo Bases Plugin existente.")
+        try:
+            with zipfile.ZipFile(self.path) as archive:
+                entries = self._entries(archive)
+                catalog_entry = entries.get(self.CATALOG_MEMBER)
+                signature_entry = entries.get(self.SIGNATURE_MEMBER)
+                if catalog_entry is None or signature_entry is None:
+                    raise UpdateError("Bases Plugin sem catálogo assinado completo.")
+                if (
+                    catalog_entry.file_size <= 0
+                    or catalog_entry.file_size > MAX_CATALOG_BYTES
+                    or signature_entry.file_size <= 0
+                    or signature_entry.file_size > MAX_SIGNATURE_BYTES
+                ):
+                    raise UpdateError("Catálogo ou assinatura com tamanho inválido.")
+                catalog_payload = archive.read(catalog_entry)
+                signature = archive.read(signature_entry)
+                verify_catalog_signature(
+                    catalog_payload, signature, self.public_key_pem
+                )
+                self._catalog = _parse_catalog(catalog_payload, allow_bundle_urls=True)
+                expected = {
+                    self.CATALOG_MEMBER,
+                    self.SIGNATURE_MEMBER,
+                    *(self._member(package) for package in self._catalog.packages),
+                }
+                present = set(entries)
+                missing = expected - present
+                if missing:
+                    raise UpdateError(
+                        "O Bases Plugin não contém todos os pacotes declarados."
+                    )
+                extra = present - expected
+                if extra:
+                    raise UpdateError(
+                        "O Bases Plugin contém conteúdo não declarado pelo catálogo."
+                    )
+                for package in self._catalog.packages:
+                    self._verify_package(
+                        archive, entries[self._member(package)], package
+                    )
+        except UpdateError:
+            raise
+        except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+            raise UpdateError(
+                "Bases Plugin inválido. Nenhuma base foi modificada."
+            ) from exc
+
+    @staticmethod
+    def _entries(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
+        entries: dict[str, zipfile.ZipInfo] = {}
+        for entry in archive.infolist():
+            name = _safe_relative_path(entry.filename, "arquivo do Bases Plugin")
+            if name in entries:
+                raise UpdateError("Bases Plugin contém nomes duplicados.")
+            if entry.is_dir() or entry.flag_bits & 0x1:
+                raise UpdateError("Bases Plugin contém entrada inválida.")
+            entries[name] = entry
+        return entries
+
+    @staticmethod
+    def _member(package: CatalogPackage) -> str:
+        return f"packages/{package.identifier}.zip"
+
+    @staticmethod
+    def _verify_package(
+        archive: zipfile.ZipFile,
+        entry: zipfile.ZipInfo,
+        package: CatalogPackage,
+    ) -> None:
+        if entry.file_size != package.size_bytes:
+            raise UpdateError(
+                f"Tamanho do pacote {package.identifier} diverge do catálogo assinado."
+            )
+        digest = hashlib.sha256()
+        total = 0
+        with archive.open(entry) as source:
+            for block in iter(lambda: source.read(1024 * 1024), b""):
+                total += len(block)
+                if total > package.size_bytes:
+                    raise UpdateError("Pacote interno maior que o tamanho assinado.")
+                digest.update(block)
+        if total != package.size_bytes or not hmac.compare_digest(
+            digest.hexdigest(), package.sha256
+        ):
+            raise UpdateError(
+                f"Integridade do pacote {package.identifier} não comprovada."
+            )
+
+    def fetch_catalog(self) -> Catalog:
+        return self._catalog
+
+    def download_package(
+        self,
+        url: str,
+        destination: Path,
+        expected_size: int,
+        expected_sha256: str,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> None:
+        matches = [
+            package
+            for package in self._catalog.packages
+            if package.url == url
+            and package.size_bytes == expected_size
+            and hmac.compare_digest(package.sha256, expected_sha256)
+        ]
+        if len(matches) != 1:
+            raise UpdateError(
+                "Pacote solicitado não pertence à publicação selecionada."
+            )
+        package = matches[0]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(destination.suffix + ".local")
+        temporary.unlink(missing_ok=True)
+        try:
+            with (
+                zipfile.ZipFile(self.path) as archive,
+                archive.open(self._member(package)) as source,
+                temporary.open("xb") as target,
+            ):
+                digest = hashlib.sha256()
+                total = 0
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    total += len(block)
+                    digest.update(block)
+                    target.write(block)
+                    if progress is not None:
+                        progress(total, expected_size)
+            if total != expected_size or not hmac.compare_digest(
+                digest.hexdigest(), expected_sha256
+            ):
+                raise UpdateError("Pacote interno diverge do catálogo assinado.")
+            os.replace(temporary, destination)
+        except UpdateError:
+            temporary.unlink(missing_ok=True)
+            raise
+        except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+            temporary.unlink(missing_ok=True)
+            raise UpdateError(
+                "Não foi possível ler o Bases Plugin. A base local foi preservada."
+            ) from exc
 
 
 def _registry_path(data_root: Path) -> Path:
