@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
@@ -14,6 +15,11 @@ from qgis_plugin_microcredito.domain.normalize import (
     is_masked_document,
     normalize_car,
     normalize_document,
+)
+from qgis_plugin_microcredito.domain.wkt import (
+    analyze_area_wkt,
+    is_valid_point_wkt,
+    wkt_type,
 )
 from qgis_plugin_microcredito.infrastructure.csv_reader import (
     iter_rows,
@@ -177,6 +183,12 @@ class ImportResult:
         return ImportRecord(**self.__dict__)
 
 
+TOLERATED_REJECTION_REASONS = frozenset(
+    {"non_area_point_geometry", "non_area_zero_area_geometry"}
+)
+MAX_TOLERATED_REJECTION_RATIO = 0.01
+
+
 def _value(row: dict[str, str], aliases: Iterable[str]) -> str:
     return value_from_aliases(row, tuple(aliases))
 
@@ -240,6 +252,70 @@ def _decimal(value: str) -> float | None:
         return float(value.replace(",", "."))
     except (AttributeError, ValueError):
         return None
+
+
+def _row_validation_result(
+    tipo: str,
+    row: dict[str, str],
+    aliases: dict[str, tuple[str, ...]],
+    *,
+    strict_geometry: bool,
+) -> str | None:
+    if tipo == "mma_mcr":
+        return None if normalize_car(_value(row, aliases["car"])) else "missing_car"
+    ref_bacen = _value(row, aliases["ref_bacen"])
+    if not ref_bacen:
+        return "missing_ref_bacen"
+    if tipo == "mutuarios":
+        return None
+    if tipo == "propriedades":
+        return None if _value(row, aliases["car"]) else "missing_car"
+    if tipo in ("operacoes", "complementos"):
+        return None if _value(row, aliases["nu_ordem"]) else "missing_nu_ordem"
+    if tipo == "glebas" and "GT_GEOMETRIA" in row:
+        geometria = row.get("GT_GEOMETRIA", "").strip()
+        if not _value(row, aliases["nu_ordem"]):
+            return "missing_nu_ordem"
+        if not geometria:
+            return "missing_geometry"
+        if not strict_geometry:
+            return (
+                None
+                if geometria.upper().startswith(("POLYGON", "MULTIPOLYGON"))
+                else "unsupported_geometry_type"
+            )
+        geometry_type = wkt_type(geometria)
+        if geometry_type == "POINT":
+            return (
+                "non_area_point_geometry"
+                if is_valid_point_wkt(geometria)
+                else "invalid_point_geometry"
+            )
+        if geometry_type not in ("POLYGON", "MULTIPOLYGON"):
+            return "unsupported_geometry_type"
+        analysis = analyze_area_wkt(geometria)
+        if analysis.issue == "zero_area":
+            return "non_area_zero_area_geometry"
+        if analysis.issue is not None:
+            return f"invalid_area_geometry_{analysis.issue}"
+        return None
+    if tipo == "glebas":
+        if not _value(row, aliases["nu_ordem"]):
+            return "missing_nu_ordem"
+        if _integer(_value(row, aliases["indice_gleba"])) is None:
+            return "invalid_gleba_index"
+        if _integer(_value(row, aliases["indice_ponto"])) is None:
+            return "invalid_point_index"
+        if _decimal(_value(row, aliases["latitude"])) is None:
+            return "invalid_latitude"
+        if _decimal(_value(row, aliases["longitude"])) is None:
+            return "invalid_longitude"
+        return None
+    raise ValueError(f"Tipo de importação inválido: {tipo}")
+
+
+def _tolerated_rejections_exceeded(total: int, rejected: int) -> bool:
+    return bool(rejected and rejected / total > MAX_TOLERATED_REJECTION_RATIO)
 
 
 def import_file(
@@ -319,6 +395,10 @@ def _import_file(
         connection.execute(f"DROP INDEX IF EXISTS {index_name}")
 
     total = valid = rejected = 0
+    rejection_reasons: Counter[str] = Counter()
+    signed_update = bool(
+        source_reference and source_reference.startswith("atualizacao-assinada:")
+    )
     rows = iter_rows(path)
     try:
         first = next(rows)
@@ -347,12 +427,18 @@ def _import_file(
     _validate_headers(first, aliases, required)
     for row in chain((first,), rows):
         total += 1
+        rejection_reason = _row_validation_result(
+            tipo,
+            row,
+            aliases,
+            strict_geometry=signed_update,
+        )
+        if rejection_reason is not None:
+            rejected += 1
+            rejection_reasons[rejection_reason] += 1
+            continue
         if tipo == "mma_mcr":
             car = _value(row, aliases["car"])
-            car_normalized = normalize_car(car)
-            if not car_normalized:
-                rejected += 1
-                continue
             insert(
                 """INSERT INTO mma_mcr
                 (importacao_id, car_original, car_normalizado, status_imovel,
@@ -364,7 +450,7 @@ def _import_file(
                 (
                     import_id,
                     car,
-                    car_normalized,
+                    normalize_car(car),
                     _value(row, aliases["status_imovel"]),
                     _value(row, aliases["condicao"]),
                     _value(row, aliases["data_atualizacao"]),
@@ -386,9 +472,6 @@ def _import_file(
             valid += 1
             continue
         ref_bacen = _value(row, aliases["ref_bacen"])
-        if not ref_bacen:
-            rejected += 1
-            continue
         document = _value(row, aliases.get("documento", ()))
         if tipo == "mutuarios":
             MutuarioRow(ref_bacen=ref_bacen, documento=document)
@@ -409,9 +492,6 @@ def _import_file(
             )
         elif tipo == "propriedades":
             car = _value(row, aliases["car"])
-            if not car:
-                rejected += 1
-                continue
             insert(
                 """INSERT INTO sicor_propriedade
                 (importacao_id, ref_bacen, nu_ordem, documento_original,
@@ -433,9 +513,6 @@ def _import_file(
             )
         elif tipo == "operacoes":
             nu_ordem = _value(row, aliases["nu_ordem"])
-            if not nu_ordem:
-                rejected += 1
-                continue
             insert(
                 """INSERT INTO sicor_operacao
                 (importacao_id, ref_bacen, nu_ordem, data_emissao, data_vencimento,
@@ -461,9 +538,6 @@ def _import_file(
             )
         elif tipo == "complementos":
             nu_ordem = _value(row, aliases["nu_ordem"])
-            if not nu_ordem:
-                rejected += 1
-                continue
             insert(
                 """INSERT INTO sicor_complemento_operacao
                 (importacao_id, ref_bacen, nu_ordem, ref_bacen_efetivo, agencia_if,
@@ -483,13 +557,6 @@ def _import_file(
             nu_ordem = _value(row, aliases["nu_ordem"])
             geometria = row.get("GT_GEOMETRIA", "").strip()
             indice = _integer(row.get("NU_INDICE", ""))
-            if (
-                not nu_ordem
-                or not geometria
-                or not geometria.upper().startswith(("POLYGON", "MULTIPOLYGON"))
-            ):
-                rejected += 1
-                continue
             insert(
                 """INSERT INTO sicor_gleba_wkt
                 (importacao_id, ref_bacen, nu_ordem, indice_gleba, geometria_wkt)
@@ -502,14 +569,6 @@ def _import_file(
             indice_ponto = _integer(_value(row, aliases["indice_ponto"]))
             latitude = _decimal(_value(row, aliases["latitude"]))
             longitude = _decimal(_value(row, aliases["longitude"]))
-            if not nu_ordem or None in (
-                indice_gleba,
-                indice_ponto,
-                latitude,
-                longitude,
-            ):
-                rejected += 1
-                continue
             insert(
                 """INSERT INTO sicor_ponto_gleba
                 (importacao_id, ref_bacen, nu_ordem, identificador, indice_gleba,
@@ -530,10 +589,19 @@ def _import_file(
             )
         valid += 1
     flush()
-    if not valid or rejected:
+    blocking_reasons = set(rejection_reasons) - TOLERATED_REJECTION_REASONS
+    tolerance_exceeded = _tolerated_rejections_exceeded(total, rejected)
+    strict_failure = signed_update and (blocking_reasons or tolerance_exceeded)
+    legacy_failure = not signed_update and bool(rejected)
+    if not valid or strict_failure or legacy_failure:
+        tolerance_detail = (
+            " O limite de rejeições toleradas foi excedido (máximo de 1%)."
+            if tolerance_exceeded and not blocking_reasons
+            else ""
+        )
         raise ValueError(
             f"Carga não ativada: {valid} registros válidos e {rejected} rejeitados. "
-            "A versão anterior foi preservada."
+            f"A versão anterior foi preservada.{tolerance_detail}"
         )
     if file_sha256(path) != digest:
         raise ValueError(
