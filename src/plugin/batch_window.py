@@ -29,6 +29,9 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from qgis_plugin_microcredito.application.hashing import file_sha256
+from qgis_plugin_microcredito.application.local_data_paths import (
+    default_local_data_paths,
+)
 from qgis_plugin_microcredito.application.owner_documents import (
     require_owner_documents,
 )
@@ -45,6 +48,7 @@ from qgis_plugin_microcredito.domain.policy import (
 )
 
 from .analysis import default_sources
+from .base_access import with_base_access
 from .batch import BatchRow, batch_task_identity, read_batch_xlsx
 from .car_source import car_feature_context, export_car_feature, normalize_car
 from .evidence import (
@@ -63,6 +67,7 @@ class BatchWindow(QDialog):
         self.iface = iface
         self.core_loader = core_loader
         self.settings = QSettings("Cactvs", "CARMicrocredito")
+        self.local_paths = default_local_data_paths()
         self.rows: list[BatchRow] = []
         self.tasks: list[dict[str, object]] = []
         self.cancel_requested = False
@@ -85,31 +90,16 @@ class BatchWindow(QDialog):
             QHeaderView::section { background: #e7f0ec; color: #25483b; padding: 7px; border: 0; border-right: 1px solid #ccd8d3; font-weight: 600; }
         """)
 
-        self.db_path = QLineEdit(self.settings.value("database", "", type=str))
-        self.car_base_path = QLineEdit(self.settings.value("car_base", "", type=str))
         self.xlsx_path = QLineEdit()
         self.output_path = QLineEdit()
-        saved_db = self.db_path.text().strip()
         saved_output = self.settings.value(
             "batch_report_output_dir", "", type=str
         ).strip()
-        if not self.car_base_path.text().strip() and saved_db:
-            self.car_base_path.setText(str(Path(saved_db).resolve().parent / "car"))
         if saved_output:
             self.output_path.setText(saved_output)
-        elif saved_db:
-            self.output_path.setText(
-                str(Path(saved_db).resolve().parent.parent / "output" / "lotes")
-            )
+        else:
+            self.output_path.setText(str(self.local_paths.root / "output" / "lotes"))
 
-        choose_db = QPushButton("Selecionar…")
-        choose_db.clicked.connect(
-            lambda: self._choose_file(
-                self.db_path, "Banco SQLite (*.db *.sqlite *.sqlite3)"
-            )
-        )
-        choose_car = QPushButton("Selecionar…")
-        choose_car.clicked.connect(lambda: self._choose_directory(self.car_base_path))
         choose_xlsx = QPushButton("Selecionar planilha…")
         choose_xlsx.clicked.connect(
             lambda: self._choose_file(self.xlsx_path, "Planilha Excel (*.xlsx)")
@@ -128,8 +118,6 @@ class BatchWindow(QDialog):
         form = QFormLayout(paths)
         form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        form.addRow("Banco SQLite", self._row(self.db_path, choose_db))
-        form.addRow("Polígonos do CAR", self._row(self.car_base_path, choose_car))
         form.addRow("Planilha de consultas", self._row(self.xlsx_path, choose_xlsx))
         form.addRow("Pasta dos relatórios", self._row(self.output_path, choose_output))
 
@@ -219,11 +207,6 @@ class BatchWindow(QDialog):
         path, _ = QFileDialog.getOpenFileName(
             self, "Selecionar arquivo", field.text(), file_filter
         )
-        if path:
-            field.setText(path)
-
-    def _choose_directory(self, field):
-        path = QFileDialog.getExistingDirectory(self, "Selecionar pasta", field.text())
         if path:
             field.setText(path)
 
@@ -375,14 +358,7 @@ class BatchWindow(QDialog):
 
     def _prepare_work_directory(self) -> Path:
         configured = os.environ.get("CAR_MICROCREDITO_TEMP_DIR", "").strip()
-        root = (
-            Path(configured)
-            if configured
-            else Path(os.environ.get("LOCALAPPDATA") or self.output_path.text())
-            / "Cactvs"
-            / "CAR_Microcredito"
-            / "temporarios"
-        )
+        root = Path(configured) if configured else self.local_paths.root / "temporarios"
         work = root / "lotes" / self.run_id
         try:
             work.mkdir(parents=True)
@@ -394,18 +370,20 @@ class BatchWindow(QDialog):
         return work
 
     def _paths(self):
-        database = Path(self.db_path.text().strip())
-        car_base = Path(self.car_base_path.text().strip())
+        database = self.local_paths.database
+        car_base = self.local_paths.car
         output_text = self.output_path.text().strip()
         if not database.is_file():
-            raise ValueError("Selecione um banco SQLite existente.")
+            raise ValueError(
+                "As bases locais ainda não foram instaladas. Aplique um Bases Plugin."
+            )
         if not car_base.is_dir():
-            raise ValueError("Selecione a pasta nacional com os polígonos do CAR.")
+            raise ValueError(
+                "O Bases Plugin instalado não contém os polígonos nacionais do CAR."
+            )
         if not output_text:
             raise ValueError("Escolha a pasta em que os relatórios serão gravados.")
         output = self._prepare_output_directory(Path(output_text).expanduser())
-        self.settings.setValue("database", str(database))
-        self.settings.setValue("car_base", str(car_base))
         self.settings.setValue("batch_report_output_dir", str(output))
         self.settings.sync()
         return database, car_base, output
@@ -594,6 +572,7 @@ class BatchWindow(QDialog):
                 analysis["mapa_legenda"] = map_legend
         return analysis
 
+    @with_base_access
     def process_batch(self):
         if not self.validate_spreadsheet():
             return
@@ -620,7 +599,7 @@ class BatchWindow(QDialog):
                 self.database_evidence = collect_database_evidence(connection)
                 self.tasks, failures = self._expand_tasks(connection, find_by_document)
                 self.table.setRowCount(len(self.tasks))
-                sources = default_sources(database.parent / "ambientais")
+                sources = default_sources(self.local_paths.environmental)
                 analyzer = EnvironmentalWorker(sources)
                 self.active_worker = analyzer
                 total = len(self.tasks)
