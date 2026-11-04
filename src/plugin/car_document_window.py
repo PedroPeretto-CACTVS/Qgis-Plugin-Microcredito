@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from qgis_plugin_microcredito.application.local_data_paths import (
+    default_local_data_paths,
+)
 from qgis_plugin_microcredito.domain.normalize import (
     normalize_car,
     normalize_document,
@@ -30,7 +33,6 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QApplication,
     QDialog,
-    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -41,6 +43,8 @@ from qgis.PyQt.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
 )
+
+from .base_access import with_base_access
 
 
 class CarDocumentWindow(QDialog):
@@ -66,6 +70,7 @@ class CarDocumentWindow(QDialog):
         self.iface = iface
         self.load_core = load_core
         self.settings = QSettings("Cactvs", "CARMicrocredito")
+        self.local_paths = default_local_data_paths()
         self.results: list[dict[str, object]] = []
 
         self.setWindowTitle("CAR Microcrédito | Consultar CPF/CNPJ por CAR")
@@ -100,14 +105,6 @@ class CarDocumentWindow(QDialog):
         introduction.setObjectName("notice")
         introduction.setWordWrap(True)
 
-        self.database = QLineEdit(self.settings.value("database", "", type=str))
-        self.database.setPlaceholderText("Selecione o arquivo car_microcredito.db")
-        choose_database = QPushButton("Selecionar…")
-        choose_database.clicked.connect(self._select_database)
-        database_row = QHBoxLayout()
-        database_row.addWidget(QLabel("Banco SQLite"))
-        database_row.addWidget(self.database, 1)
-        database_row.addWidget(choose_database)
 
         self.car = QLineEdit()
         self.car.setPlaceholderText("Informe o número completo do CAR")
@@ -158,38 +155,25 @@ class CarDocumentWindow(QDialog):
         layout.setSpacing(9)
         layout.addWidget(title)
         layout.addWidget(introduction)
-        layout.addLayout(database_row)
         layout.addLayout(search_row)
         layout.addWidget(self.status)
         layout.addWidget(self.table, 1)
         layout.addWidget(privacy)
         layout.addLayout(actions)
 
-    def _select_database(self):
-        selected, _ = QFileDialog.getOpenFileName(
-            self,
-            "Selecionar banco SQLite",
-            self.database.text(),
-            "SQLite (*.db *.sqlite);;Todos os arquivos (*)",
-        )
-        if selected:
-            self.database.setText(selected)
-            self.settings.setValue("database", selected)
-
     def _connection(self):
-        path = self.database.text().strip()
-        if not path:
+        path = self.local_paths.database
+        if not path.is_file():
             raise ValueError(
-                "Selecione o banco car_microcredito.db antes de consultar."
+                "As bases locais ainda não foram instaladas. "
+                "Aplique um Bases Plugin antes de consultar."
             )
-        if not Path(path).is_file():
-            raise ValueError("O banco SQLite selecionado não existe.")
-        self.settings.setValue("database", path)
         connect, initialize, *_ = self.load_core()
         connection = connect(path)
         initialize(connection)
         return connection
 
+    @with_base_access
     def search(self):
         car_value = self.car.text().strip()
         if not normalize_car(car_value):
