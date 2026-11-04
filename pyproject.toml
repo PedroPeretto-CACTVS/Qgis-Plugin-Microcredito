@@ -102,3 +102,7 @@ markers = [
     "qgis: tests that require a QGIS/PyQGIS runtime",
 ]
 addopts = "-ra -q --cov=qgis_plugin_microcredito --cov=database --cov=cli --cov=installer --cov-report=term-missing"
+
+[tool.coverage.run]
+# The updater is intentionally exercised through real child processes.
+patch = ["subprocess"]
