@@ -16,12 +16,17 @@ from uuid import uuid4
 
 from database.schema import SCHEMA_VERSION, initialize
 from database.session import connect
+from qgis_plugin_microcredito.application.query_service import (
+    find_slave_labor_by_documents,
+)
 from qgis_plugin_microcredito.infrastructure.downloads import validate_geopackage
 from qgis_plugin_microcredito.infrastructure.updates import (
     TEST_PUBLISHER_PUBLIC_KEY_PEM,
+    BaseReleaseBundle,
     Catalog,
     CatalogClient,
     CatalogPackage,
+    LocalRestorer,
     LocalUpdater,
     UpdateError,
     _acquire_update_lock,
@@ -29,6 +34,7 @@ from qgis_plugin_microcredito.infrastructure.updates import (
     _parse_catalog,
     _release_update_lock,
     _SecureHttpsRedirectHandler,
+    apply_catalog_release,
     compare_catalog,
     ensure_not_updating,
     latest_restore_point,
@@ -117,7 +123,832 @@ class UpdateTests(unittest.TestCase):
             connection.commit()
         finally:
             connection.close()
+
         return path
+
+    def _write_release_bundle(
+        self,
+        path: Path,
+        catalog_payload: bytes,
+        packages: dict[str, bytes],
+    ) -> Path:
+        with zipfile.ZipFile(path, "w", allowZip64=True) as archive:
+            archive.writestr("catalog.json", catalog_payload)
+            archive.writestr("catalog.json.sig", b"assinatura-teste")
+            for identifier, content in packages.items():
+                archive.writestr(f"packages/{identifier}.zip", content)
+        return path
+
+    def test_local_release_bundle_verifies_every_embedded_package(self):
+        package = _package(
+            {
+                "schema_version": 1,
+                "id": "mte",
+                "version": "2026.10.06",
+                "strategy": "import_mte",
+                "provides": ["mte"],
+                "payloads": {"file": "payload/mte.csv"},
+            },
+            {"payload/mte.csv": b"conteudo-oficial"},
+        )
+        catalog_payload = json.dumps(
+            {
+                "schema_version": 1,
+                "issued_at": "2026-10-15T12:00:00-03:00",
+                "expires_at": "2027-10-15T12:00:00-03:00",
+                "packages": [
+                    {
+                        "id": "mte",
+                        "label": "Cadastro MTE",
+                        "version": "2026.10.06",
+                        "strategy": "import_mte",
+                        "url": "carbases://packages/mte.zip",
+                        "sha256": hashlib.sha256(package).hexdigest(),
+                        "size_bytes": len(package),
+                        "validity_until": "2027-04-05",
+                    }
+                ],
+            }
+        ).encode()
+        release_path = self._write_release_bundle(
+            self.root / "bases-2026-10.carbases",
+            catalog_payload,
+            {"mte": package},
+        )
+
+        with patch(
+            "qgis_plugin_microcredito.infrastructure.updates.verify_catalog_signature"
+        ) as verify:
+            release = BaseReleaseBundle(release_path, TEST_PUBLISHER_PUBLIC_KEY_PEM)
+            catalog = release.fetch_catalog()
+            destination = self.root / "downloaded.zip"
+            release.download_package(
+                catalog.packages[0].url,
+                destination,
+                catalog.packages[0].size_bytes,
+                catalog.packages[0].sha256,
+            )
+
+        verify.assert_called_once_with(
+            catalog_payload, b"assinatura-teste", TEST_PUBLISHER_PUBLIC_KEY_PEM
+        )
+        self.assertEqual(destination.read_bytes(), package)
+
+    def test_catalog_release_bootstraps_missing_data_root_from_valid_bundle(self):
+        csv = (
+            "ID;Ano da acao fiscal;UF;Empregador;CNPJ/CPF;Estabelecimento;Trabalhadores envolvidos;CNAE;"
+            "Decisao administrativa de procedencia;Inclusao no Cadastro de Empregadores\n"
+            "1;2026;MT;Empresa Teste;12.345.678/0001-90;Endereco;2;0111-2/01;2026-01-01;2026-02-01\n"
+        ).encode("cp1252")
+        package = _package(
+            {
+                "schema_version": 1,
+                "id": "mte",
+                "version": "2026.10.06",
+                "strategy": "import_mte",
+                "provides": ["mte"],
+                "payloads": {"file": "payload/mte.csv"},
+            },
+            {"payload/mte.csv": csv},
+        )
+        catalog_payload = json.dumps(
+            {
+                "schema_version": 3,
+                "issued_at": "2026-10-23T12:00:00-03:00",
+                "expires_at": "2027-10-23T12:00:00-03:00",
+                "publication": {
+                    "channel": "homologacao",
+                    "prepared_by": "Equipe de Dados",
+                    "change_reference": "BOOTSTRAP-001",
+                },
+                "packages": [
+                    {
+                        "id": "mte",
+                        "label": "Cadastro de Empregadores — MTE",
+                        "version": "2026.10.06",
+                        "strategy": "import_mte",
+                        "provides": ["mte"],
+                        "source_date": "2026-10-06",
+                        "source_reference": "Cadastro de Empregadores — MTE",
+                        "source_evidence": {
+                            "official_page_url": "https://www.gov.br/trabalho-e-emprego/",
+                            "official_artifact_url": "https://www.gov.br/trabalho-e-emprego/mte.csv",
+                            "checked_at": "2026-10-23T11:30:00-03:00",
+                        },
+                        "compatibility": {
+                            "minimum_plugin_version": "0.9.5",
+                            "maximum_plugin_version": "0.9.5",
+                            "database_schema_version": SCHEMA_VERSION,
+                            "package_manifest_schema_version": 1,
+                        },
+                        "url": "carbases://packages/mte.zip",
+                        "sha256": hashlib.sha256(package).hexdigest(),
+                        "size_bytes": len(package),
+                        "validity_until": "2027-04-05",
+                    }
+                ],
+            }
+        ).encode()
+        release_path = self._write_release_bundle(
+            self.root / "bootstrap.carbases",
+            catalog_payload,
+            {"mte": package},
+        )
+        data_root = self.root / "fixed-data"
+        database = data_root / "car_microcredito.db"
+        self.assertFalse(data_root.exists())
+
+        with patch(
+            "qgis_plugin_microcredito.infrastructure.updates.verify_catalog_signature"
+        ):
+            release = BaseReleaseBundle(release_path, TEST_PUBLISHER_PUBLIC_KEY_PEM)
+        final_progress_was_locked = []
+
+        def observe_progress(_value: int, message: str) -> None:
+            if message != "Bases Plugin aplicado e validado.":
+                return
+            try:
+                ensure_not_updating(data_root)
+            except UpdateError:
+                final_progress_was_locked.append(True)
+
+        statuses = apply_catalog_release(
+            release.fetch_catalog(),
+            data_root,
+            database,
+            release,
+            progress=observe_progress,
+        )
+
+        self.assertEqual([status.identifier for status in statuses], ["mte"])
+        self.assertEqual(final_progress_was_locked, [True])
+        self.assertTrue(database.is_file())
+        connection = connect(database, readonly=True)
+        try:
+            self.assertEqual(
+                len(find_slave_labor_by_documents(connection, ["12.345.678/0001-90"])),
+                1,
+            )
+            self.assertEqual(
+                connection.execute("PRAGMA user_version").fetchone()[0],
+                SCHEMA_VERSION,
+            )
+        finally:
+            connection.close()
+
+        prepared_root = self.root / "fixed-data-with-lock-file"
+        prepared_lock = update_lock_path(prepared_root)
+        prepared_lock.parent.mkdir(parents=True)
+        prepared_lock.touch()
+        prepared_database = prepared_root / "car_microcredito.db"
+
+        prepared_statuses = apply_catalog_release(
+            release.fetch_catalog(),
+            prepared_root,
+            prepared_database,
+            release,
+        )
+
+        self.assertEqual(
+            [status.identifier for status in prepared_statuses],
+            ["mte"],
+        )
+        self.assertTrue(prepared_database.is_file())
+
+    def test_failed_bootstrap_release_removes_database_and_installed_markers(self):
+        csv = (
+            "ID;Ano da acao fiscal;UF;Empregador;CNPJ/CPF;Estabelecimento;Trabalhadores envolvidos;CNAE;"
+            "Decisao administrativa de procedencia;Inclusao no Cadastro de Empregadores\n"
+            "1;2026;MT;Empresa Teste;12.345.678/0001-90;Endereco;2;0111-2/01;2026-01-01;2026-02-01\n"
+        ).encode("cp1252")
+        mte_package = _package(
+            {
+                "schema_version": 1,
+                "id": "mte",
+                "version": "2026.10.06",
+                "strategy": "import_mte",
+                "provides": ["mte"],
+                "payloads": {"file": "payload/mte.csv"},
+            },
+            {"payload/mte.csv": csv},
+        )
+        invalid_sicar_package = _package(
+            {
+                "schema_version": 1,
+                "id": "id-divergente",
+                "version": "2026.10.23",
+                "strategy": "replace_file",
+                "provides": ["sicar_imoveis_ac"],
+                "target": "car/AC/AC_AREA_IMOVEL.gpkg",
+                "payloads": {"file": "payload/AC_AREA_IMOVEL.gpkg"},
+            },
+            {"payload/AC_AREA_IMOVEL.gpkg": b"conteudo-invalido"},
+        )
+
+        def descriptor(
+            identifier: str,
+            label: str,
+            version: str,
+            strategy: str,
+            package: bytes,
+            **extra: object,
+        ) -> dict[str, object]:
+            return {
+                "id": identifier,
+                "label": label,
+                "version": version,
+                "strategy": strategy,
+                "provides": [identifier],
+                "source_date": "2026-10-23",
+                "source_reference": label,
+                "source_evidence": {
+                    "official_page_url": "https://www.gov.br/fonte-oficial/",
+                    "official_artifact_url": "https://www.gov.br/fonte-oficial/arquivo",
+                    "checked_at": "2026-10-23T11:30:00-03:00",
+                },
+                "compatibility": {
+                    "minimum_plugin_version": "0.9.5",
+                    "maximum_plugin_version": "0.9.5",
+                    "database_schema_version": SCHEMA_VERSION,
+                    "package_manifest_schema_version": 1,
+                },
+                "url": f"carbases://packages/{identifier}.zip",
+                "sha256": hashlib.sha256(package).hexdigest(),
+                "size_bytes": len(package),
+                **extra,
+            }
+
+        catalog_payload = json.dumps(
+            {
+                "schema_version": 3,
+                "issued_at": "2026-10-23T12:00:00-03:00",
+                "expires_at": "2027-10-23T12:00:00-03:00",
+                "publication": {
+                    "channel": "homologacao",
+                    "prepared_by": "Equipe de Dados",
+                    "change_reference": "BOOTSTRAP-ROLLBACK-001",
+                },
+                "packages": [
+                    descriptor(
+                        "mte",
+                        "Cadastro de Empregadores — MTE",
+                        "2026.10.06",
+                        "import_mte",
+                        mte_package,
+                        validity_until="2027-04-05",
+                    ),
+                    descriptor(
+                        "sicar_imoveis_ac",
+                        "SICAR/AC",
+                        "2026.10.23",
+                        "replace_file",
+                        invalid_sicar_package,
+                        target="car/AC/AC_AREA_IMOVEL.gpkg",
+                    ),
+                ],
+            }
+        ).encode()
+        release_path = self._write_release_bundle(
+            self.root / "bootstrap-rollback.carbases",
+            catalog_payload,
+            {
+                "mte": mte_package,
+                "sicar_imoveis_ac": invalid_sicar_package,
+            },
+        )
+        data_root = self.root / "fixed-data-rollback"
+        database = data_root / "car_microcredito.db"
+
+        with patch(
+            "qgis_plugin_microcredito.infrastructure.updates.verify_catalog_signature"
+        ):
+            release = BaseReleaseBundle(release_path, TEST_PUBLISHER_PUBLIC_KEY_PEM)
+        with self.assertRaisesRegex(UpdateError, "restauradas"):
+            apply_catalog_release(release.fetch_catalog(), data_root, database, release)
+
+        self.assertFalse(database.exists())
+        self.assertFalse((data_root / "car" / "AC" / "AC_AREA_IMOVEL.gpkg").exists())
+        self.assertIsNone(latest_restore_point(data_root, database))
+        registry_path = data_root / ".atualizacoes" / "estado.json"
+        self.assertFalse(registry_path.exists())
+
+        older_mte = self._package_descriptor(
+            "mte",
+            "import_mte",
+            mte_package,
+            version="2026.10.06",
+            validity_until="2027-04-05",
+            catalog_issued_at="2026-10-22T12:00:00-03:00",
+        )
+        older_catalog = Catalog(
+            "2026-10-22T12:00:00-03:00",
+            "2027-10-22T12:00:00-03:00",
+            (older_mte,),
+        )
+        statuses = apply_catalog_release(
+            older_catalog,
+            data_root,
+            database,
+            self._client({older_mte.url: mte_package}),
+        )
+
+        self.assertEqual([status.identifier for status in statuses], ["mte"])
+        self.assertTrue(database.is_file())
+
+    def test_release_without_applicable_pending_package_does_not_create_database(self):
+        archive = b"pacote-nao-baixado"
+        package = self._package_descriptor(
+            "mte",
+            "import_mte",
+            archive,
+            version="2026.10.06",
+            validity_until="2027-04-05",
+            minimum_plugin_version="99.0.0",
+            maximum_plugin_version="99.0.0",
+            database_schema_version=SCHEMA_VERSION,
+            package_manifest_schema_version=1,
+        )
+        catalog = Catalog(
+            "2026-10-23T15:00:00+00:00",
+            "2027-10-23T15:00:00+00:00",
+            (package,),
+        )
+        data_root = self.root / "fixed-data-incompatible"
+        database = data_root / "car_microcredito.db"
+
+        statuses = apply_catalog_release(
+            catalog,
+            data_root,
+            database,
+            self._client({package.url: archive}),
+        )
+
+        self.assertEqual(statuses, [])
+        self.assertFalse(data_root.exists())
+        self.assertFalse(database.exists())
+
+    def test_failed_bootstrap_preserves_recovery_database_when_rollback_fails(self):
+        first_archive = _package(
+            {
+                "id": "primeira",
+                "version": "2026.10.23",
+                "strategy": "replace_file",
+                "target": "normativos/primeira.txt",
+                "payloads": {"file": "payload/primeira.txt"},
+            },
+            {"payload/primeira.txt": b"primeira"},
+        )
+        invalid_archive = _package(
+            {
+                "id": "id-divergente",
+                "version": "2026.10.23",
+                "strategy": "replace_file",
+                "target": "normativos/segunda.txt",
+                "payloads": {"file": "payload/segunda.txt"},
+            },
+            {"payload/segunda.txt": b"segunda"},
+        )
+        first = self._package_descriptor(
+            "primeira",
+            "replace_file",
+            first_archive,
+            version="2026.10.23",
+            target="normativos/primeira.txt",
+        )
+        invalid = self._package_descriptor(
+            "segunda",
+            "replace_file",
+            invalid_archive,
+            version="2026.10.23",
+            target="normativos/segunda.txt",
+        )
+        catalog = Catalog(
+            "2026-10-23T15:00:00+00:00",
+            "2027-10-23T15:00:00+00:00",
+            (first, invalid),
+        )
+        data_root = self.root / "fixed-data-double-failure"
+        database = data_root / "car_microcredito.db"
+
+        with (
+            patch.object(
+                LocalRestorer,
+                "_restore_point",
+                autospec=True,
+                side_effect=UpdateError("falha simulada no rollback"),
+            ),
+            self.assertRaisesRegex(UpdateError, "nem todas as bases"),
+        ):
+            apply_catalog_release(
+                catalog,
+                data_root,
+                database,
+                self._client({first.url: first_archive, invalid.url: invalid_archive}),
+            )
+
+        self.assertTrue(database.is_file())
+        connection = connect(database, readonly=True)
+        try:
+            self.assertEqual(
+                connection.execute("PRAGMA quick_check").fetchone()[0], "ok"
+            )
+            self.assertEqual(
+                connection.execute("PRAGMA user_version").fetchone()[0],
+                SCHEMA_VERSION,
+            )
+        finally:
+            connection.close()
+
+    def test_release_with_incompatible_and_pending_packages_is_not_partially_applied(
+        self,
+    ):
+        incompatible_archive = b"pacote-incompativel"
+        pending_archive = b"pacote-compativel"
+        incompatible = self._package_descriptor(
+            "incompativel",
+            "replace_file",
+            incompatible_archive,
+            version="2026.10.23",
+            target="normativos/incompativel.txt",
+            minimum_plugin_version="99.0.0",
+            maximum_plugin_version="99.0.0",
+            database_schema_version=SCHEMA_VERSION,
+            package_manifest_schema_version=1,
+        )
+        pending = self._package_descriptor(
+            "compativel",
+            "replace_file",
+            pending_archive,
+            version="2026.10.23",
+            target="normativos/compativel.txt",
+        )
+        catalog = Catalog(
+            "2026-10-23T15:00:00+00:00",
+            "2027-10-23T15:00:00+00:00",
+            (incompatible, pending),
+        )
+        data_root = self.root / "fixed-data-partially-incompatible"
+        database = data_root / "car_microcredito.db"
+
+        with self.assertRaisesRegex(UpdateError, "inaplicável"):
+            apply_catalog_release(
+                catalog,
+                data_root,
+                database,
+                self._client(
+                    {
+                        incompatible.url: incompatible_archive,
+                        pending.url: pending_archive,
+                    }
+                ),
+            )
+
+        self.assertFalse(data_root.exists())
+        self.assertFalse(database.exists())
+
+    def test_bundle_url_is_accepted_only_inside_signed_offline_release(self):
+        payload = json.dumps(
+            {
+                "schema_version": 1,
+                "issued_at": "2026-10-15T12:00:00-03:00",
+                "expires_at": "2027-10-15T12:00:00-03:00",
+                "packages": [
+                    {
+                        "id": "mte",
+                        "label": "Cadastro MTE",
+                        "version": "2026.10.06",
+                        "strategy": "import_mte",
+                        "url": "carbases://packages/mte.zip",
+                        "sha256": "a" * 64,
+                        "size_bytes": 123,
+                        "validity_until": "2027-04-05",
+                    }
+                ],
+            }
+        ).encode()
+
+        with self.assertRaisesRegex(UpdateError, "HTTPS"):
+            _parse_catalog(payload)
+        catalog = _parse_catalog(payload, allow_bundle_urls=True)
+        self.assertEqual(catalog.packages[0].url, "carbases://packages/mte.zip")
+
+    def test_bundle_url_must_match_the_declared_package(self):
+        payload = json.dumps(
+            {
+                "schema_version": 1,
+                "issued_at": "2026-10-15T12:00:00-03:00",
+                "expires_at": "2027-10-15T12:00:00-03:00",
+                "packages": [
+                    {
+                        "id": "mte",
+                        "label": "Cadastro MTE",
+                        "version": "2026.10.06",
+                        "strategy": "import_mte",
+                        "url": "carbases://packages/outro.zip",
+                        "sha256": "a" * 64,
+                        "size_bytes": 123,
+                        "validity_until": "2027-04-05",
+                    }
+                ],
+            }
+        ).encode()
+
+        with self.assertRaisesRegex(UpdateError, "Bases Plugin"):
+            _parse_catalog(payload, allow_bundle_urls=True)
+
+    def test_local_release_bundle_rejects_missing_or_unlisted_packages(self):
+        catalog_payload = json.dumps(
+            {
+                "schema_version": 1,
+                "issued_at": "2026-10-15T12:00:00-03:00",
+                "expires_at": "2027-10-15T12:00:00-03:00",
+                "packages": [
+                    {
+                        "id": "mte",
+                        "label": "Cadastro MTE",
+                        "version": "2026.10.06",
+                        "strategy": "import_mte",
+                        "url": "https://publisher.example/mte.zip",
+                        "sha256": "a" * 64,
+                        "size_bytes": 123,
+                        "validity_until": "2027-04-05",
+                    }
+                ],
+            }
+        ).encode()
+        missing = self._write_release_bundle(
+            self.root / "missing.carbases", catalog_payload, {}
+        )
+        extra = self._write_release_bundle(
+            self.root / "extra.carbases",
+            catalog_payload,
+            {"mte": b"x", "nao-assinado": b"y"},
+        )
+
+        with patch(
+            "qgis_plugin_microcredito.infrastructure.updates.verify_catalog_signature"
+        ):
+            with self.assertRaisesRegex(UpdateError, "pacotes declarados"):
+                BaseReleaseBundle(missing, TEST_PUBLISHER_PUBLIC_KEY_PEM)
+            with self.assertRaisesRegex(UpdateError, "conteúdo não declarado"):
+                BaseReleaseBundle(extra, TEST_PUBLISHER_PUBLIC_KEY_PEM)
+
+    def test_catalog_release_restores_packages_and_preserves_preexisting_history(self):
+        prior_backups = {
+            self.root / ".h/manual/20260101/sentinel.db": b"old manual backup",
+            self.root / ".h/unknown/partial/restore.json": b"{incomplete metadata",
+        }
+        for path, content in prior_backups.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        first_target = self.root / "normativos" / "primeira.txt"
+        second_target = self.root / "normativos" / "segunda.txt"
+        first_target.parent.mkdir(parents=True)
+        first_target.write_text("primeira-antiga", encoding="utf-8")
+        second_target.write_text("segunda-antiga", encoding="utf-8")
+        first_archive = _package(
+            {
+                "id": "primeira",
+                "version": "2026.10.15",
+                "strategy": "replace_file",
+                "target": "normativos/primeira.txt",
+                "payloads": {"file": "payload/primeira.txt"},
+            },
+            {"payload/primeira.txt": b"primeira-nova"},
+        )
+        second_archive = _package(
+            {
+                "id": "id-divergente",
+                "version": "2026.10.15",
+                "strategy": "replace_file",
+                "target": "normativos/segunda.txt",
+                "payloads": {"file": "payload/segunda.txt"},
+            },
+            {"payload/segunda.txt": b"segunda-nova"},
+        )
+        catalog = Catalog(
+            "2026-10-15T15:00:00+00:00",
+            "2027-10-15T15:00:00+00:00",
+            (
+                self._package_descriptor(
+                    "primeira",
+                    "replace_file",
+                    first_archive,
+                    version="2026.10.15",
+                    target="normativos/primeira.txt",
+                ),
+                self._package_descriptor(
+                    "segunda",
+                    "replace_file",
+                    second_archive,
+                    version="2026.10.15",
+                    target="normativos/segunda.txt",
+                ),
+            ),
+        )
+        client = self._client(
+            {
+                catalog.packages[0].url: first_archive,
+                catalog.packages[1].url: second_archive,
+            }
+        )
+
+        with self.assertRaisesRegex(UpdateError, "restauradas"):
+            apply_catalog_release(catalog, self.root, self.database, client)
+
+        self.assertEqual(first_target.read_text(encoding="utf-8"), "primeira-antiga")
+        self.assertEqual(second_target.read_text(encoding="utf-8"), "segunda-antiga")
+
+        for path, content in prior_backups.items():
+            self.assertTrue(path.is_file(), str(path))
+            self.assertEqual(path.read_bytes(), content)
+        self.assertIsNone(latest_restore_point(self.root, self.database))
+
+    def test_catalog_release_rolls_back_multiple_prior_packages_to_one_checkpoint(self):
+        targets = [
+            self.root / "normativos" / "primeira.txt",
+            self.root / "normativos" / "segunda.txt",
+            self.root / "normativos" / "terceira.txt",
+        ]
+        targets[0].parent.mkdir(parents=True)
+        for index, target in enumerate(targets, start=1):
+            target.write_text(f"antiga-{index}", encoding="utf-8")
+        archives = [
+            _package(
+                {
+                    "id": identifier if index < 3 else "id-divergente",
+                    "version": "2026.10.15",
+                    "strategy": "replace_file",
+                    "target": f"normativos/{identifier}.txt",
+                    "payloads": {"file": f"payload/{identifier}.txt"},
+                },
+                {f"payload/{identifier}.txt": f"nova-{index}".encode()},
+            )
+            for index, identifier in enumerate(
+                ("primeira", "segunda", "terceira"), start=1
+            )
+        ]
+        descriptors = tuple(
+            self._package_descriptor(
+                identifier,
+                "replace_file",
+                archive,
+                version="2026.10.15",
+                target=f"normativos/{identifier}.txt",
+            )
+            for identifier, archive in zip(
+                ("primeira", "segunda", "terceira"), archives, strict=True
+            )
+        )
+        catalog = Catalog(
+            "2026-10-15T15:00:00+00:00",
+            "2027-10-15T15:00:00+00:00",
+            descriptors,
+        )
+        client = self._client(
+            {
+                package.url: archive
+                for package, archive in zip(descriptors, archives, strict=True)
+            }
+        )
+
+        with self.assertRaisesRegex(UpdateError, "restauradas"):
+            apply_catalog_release(catalog, self.root, self.database, client)
+
+        self.assertEqual(
+            [target.read_text(encoding="utf-8") for target in targets],
+            ["antiga-1", "antiga-2", "antiga-3"],
+        )
+        self.assertIsNone(latest_restore_point(self.root, self.database))
+
+    def test_catalog_release_restores_package_that_fails_after_file_promotion(self):
+        targets = [
+            self.root / "normativos" / "primeira.txt",
+            self.root / "normativos" / "segunda.txt",
+        ]
+        targets[0].parent.mkdir(parents=True)
+        for index, target in enumerate(targets, start=1):
+            target.write_text(f"antiga-{index}", encoding="utf-8")
+        archives = [
+            _package(
+                {
+                    "id": identifier,
+                    "version": "2026.10.15",
+                    "strategy": "replace_file",
+                    "target": f"normativos/{identifier}.txt",
+                    "payloads": {"file": f"payload/{identifier}.txt"},
+                },
+                {f"payload/{identifier}.txt": f"nova-{index}".encode()},
+            )
+            for index, identifier in enumerate(("primeira", "segunda"), start=1)
+        ]
+        descriptors = tuple(
+            self._package_descriptor(
+                identifier,
+                "replace_file",
+                archive,
+                version="2026.10.15",
+                target=f"normativos/{identifier}.txt",
+            )
+            for identifier, archive in zip(
+                ("primeira", "segunda"), archives, strict=True
+            )
+        )
+        catalog = Catalog(
+            "2026-10-15T15:00:00+00:00",
+            "2027-10-15T15:00:00+00:00",
+            descriptors,
+        )
+        client = self._client(
+            {
+                package.url: archive
+                for package, archive in zip(descriptors, archives, strict=True)
+            }
+        )
+        original_record = LocalUpdater._record_installation
+
+        def record_or_fail(updater, package):
+            if package.identifier == "segunda":
+                raise OSError("falha simulada no registro")
+            return original_record(updater, package)
+
+        with (
+            patch.object(
+                LocalUpdater,
+                "_record_installation",
+                autospec=True,
+                side_effect=record_or_fail,
+            ),
+            self.assertRaisesRegex(UpdateError, "restauradas"),
+        ):
+            apply_catalog_release(catalog, self.root, self.database, client)
+
+        self.assertEqual(
+            [target.read_text(encoding="utf-8") for target in targets],
+            ["antiga-1", "antiga-2"],
+        )
+        self.assertIsNone(latest_restore_point(self.root, self.database))
+
+    def test_catalog_release_restores_database_when_later_package_fails(self):
+        csv = (
+            "ID;Ano da acao fiscal;UF;Empregador;CNPJ/CPF;Estabelecimento;Trabalhadores envolvidos;CNAE;"
+            "Decisao administrativa de procedencia;Inclusao no Cadastro de Empregadores\n"
+            "1;2026;MT;Empresa Teste;12.345.678/0001-90;Endereco;2;0111-2/01;2026-01-01;2026-02-01\n"
+        ).encode("cp1252")
+        mte_archive = _package(
+            {
+                "id": "mte",
+                "version": "2026.10.15",
+                "strategy": "import_mte",
+                "payloads": {"file": "payload/mte.csv"},
+            },
+            {"payload/mte.csv": csv},
+        )
+        invalid_archive = _package(
+            {
+                "id": "id-divergente",
+                "version": "2026.10.15",
+                "strategy": "replace_file",
+                "target": "normativos/invalida.txt",
+                "payloads": {"file": "payload/invalida.txt"},
+            },
+            {"payload/invalida.txt": b"invalida"},
+        )
+        mte = self._package_descriptor(
+            "mte",
+            "import_mte",
+            mte_archive,
+            version="2026.10.15",
+            validity_until="2030-01-01",
+        )
+        invalid = self._package_descriptor(
+            "invalida",
+            "replace_file",
+            invalid_archive,
+            version="2026.10.15",
+            target="normativos/invalida.txt",
+        )
+        catalog = Catalog(
+            "2026-10-15T15:00:00+00:00",
+            "2027-10-15T15:00:00+00:00",
+            (mte, invalid),
+        )
+        client = self._client({mte.url: mte_archive, invalid.url: invalid_archive})
+
+        with self.assertRaisesRegex(UpdateError, "restauradas"):
+            apply_catalog_release(catalog, self.root, self.database, client)
+
+        connection = connect(self.database, readonly=True)
+        try:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM trabalho_escravo").fetchone()[
+                    0
+                ],
+                0,
+            )
+        finally:
+            connection.close()
+        self.assertIsNone(latest_restore_point(self.root, self.database))
 
     def _replace_file_catalog(
         self, issued_at: str, version: str, archive: bytes
