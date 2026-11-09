@@ -1550,7 +1550,7 @@ class LocalUpdater:
         self,
         data_root: str | Path,
         database: str | Path,
-        client: CatalogClient,
+        client: CatalogClient | BaseReleaseBundle,
         progress: Callable[[int, str], None] | None = None,
     ):
         self.data_root = Path(data_root).resolve()
@@ -1928,11 +1928,14 @@ class LocalUpdater:
         os.replace(staged_database, self.database)
 
     def apply(self, package: CatalogPackage) -> UpdateStatus:
+        return self._apply(package, acquire_lock=True)
+
+    def _apply(self, package: CatalogPackage, *, acquire_lock: bool) -> UpdateStatus:
         compatibility_error = _package_compatibility_error(package)
         if compatibility_error:
             raise UpdateError(compatibility_error)
         self._emit_progress(0, "Iniciando atualização local…")
-        lock = _acquire_update_lock(self.data_root)
+        lock = _acquire_update_lock(self.data_root) if acquire_lock else None
         # Doze caracteres aleatórios evitam colisões e preservam margem para
         # bancos SQLite dentro de pastas de usuário com caminhos extensos.
         staging = self.data_root / STAGING_DIRECTORY / uuid.uuid4().hex[:12]
@@ -1984,7 +1987,8 @@ class LocalUpdater:
             )
         finally:
             shutil.rmtree(staging, ignore_errors=True)
-            _release_update_lock(lock)
+            if lock is not None:
+                _release_update_lock(lock)
 
 
 def _read_restore_document(
@@ -2313,20 +2317,24 @@ class LocalRestorer:
                 "A restauração falhou e o arquivo atual foi recomposto."
             ) from exc
 
-    def restore_latest(self) -> UpdateStatus:
-        self._emit_progress(0, "Localizando o ponto de restauração mais recente…")
-        point = latest_restore_point(self.data_root, self.database)
-        if point is None:
-            raise UpdateError("Não existe versão anterior disponível para restauração.")
-        lock = _acquire_update_lock(self.data_root)
+    def _restore_point(
+        self,
+        point: RestorePoint,
+        *,
+        require_latest: bool,
+        acquire_lock: bool = True,
+    ) -> UpdateStatus:
+        lock = _acquire_update_lock(self.data_root) if acquire_lock else None
         staging = self.data_root / STAGING_DIRECTORY / uuid.uuid4().hex[:12]
         try:
-            # Revalida depois do bloqueio para não restaurar um ponto que deixou de ser o mais recente.
-            current = latest_restore_point(self.data_root, self.database)
-            if current is None or current.restore_id != point.restore_id:
-                raise UpdateError(
-                    "O histórico mudou antes da restauração; abra novamente a janela."
-                )
+            if require_latest:
+                # Revalida depois do bloqueio para não restaurar um ponto que
+                # deixou de ser o mais recente.
+                current = latest_restore_point(self.data_root, self.database)
+                if current is None or current.restore_id != point.restore_id:
+                    raise UpdateError(
+                        "O histórico mudou antes da restauração; abra novamente a janela."
+                    )
             history, document = _read_restore_document(
                 self.data_root, self.database, point
             )
@@ -2351,7 +2359,15 @@ class LocalRestorer:
             )
         finally:
             shutil.rmtree(staging, ignore_errors=True)
-            _release_update_lock(lock)
+            if lock is not None:
+                _release_update_lock(lock)
+
+    def restore_latest(self) -> UpdateStatus:
+        self._emit_progress(0, "Localizando o ponto de restauração mais recente…")
+        point = latest_restore_point(self.data_root, self.database)
+        if point is None:
+            raise UpdateError("Não existe versão anterior disponível para restauração.")
+        return self._restore_point(point, require_latest=True)
 
 
 def restore_latest(
@@ -2360,6 +2376,191 @@ def restore_latest(
     progress: Callable[[int, str], None] | None = None,
 ) -> UpdateStatus:
     return LocalRestorer(data_root, database, progress=progress).restore_latest()
+
+
+def _remove_database_files(database: Path) -> None:
+    for path in (
+        database,
+        database.with_name(database.name + "-wal"),
+        database.with_name(database.name + "-shm"),
+        database.with_name(database.name + "-journal"),
+    ):
+        path.unlink(missing_ok=True)
+
+
+def _registry_file_snapshot(data_root: Path) -> bytes | None:
+    target = _registry_path(data_root)
+    if not target.exists():
+        return None
+    if not target.is_file():
+        raise UpdateError("O registro local de versões não é um arquivo válido.")
+    try:
+        return target.read_bytes()
+    except OSError as exc:
+        raise UpdateError(
+            "Não foi possível proteger o registro local de versões."
+        ) from exc
+
+
+def _restore_registry_file(data_root: Path, snapshot: bytes | None) -> None:
+    target = _registry_path(data_root)
+    temporary = target.with_suffix(".json.rollback")
+    temporary.unlink(missing_ok=True)
+    if snapshot is None:
+        target.unlink(missing_ok=True)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        temporary.write_bytes(snapshot)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _pending_release_packages(
+    catalog: Catalog, data_root: Path, database: Path
+) -> list[CatalogPackage]:
+    states = {
+        item.identifier: item for item in compare_catalog(catalog, data_root, database)
+    }
+    pending = [
+        package
+        for package in catalog.packages
+        if states[package.identifier].state == "disponivel"
+    ]
+    if pending and any(item.state == "inaplicavel" for item in states.values()):
+        raise UpdateError(
+            "O Bases Plugin contém pacote incompatível ou inaplicável. "
+            "Nenhuma base foi modificada."
+        )
+    return pending
+
+
+def apply_catalog_release(
+    catalog: Catalog,
+    data_root: str | Path,
+    database: str | Path,
+    client: CatalogClient | BaseReleaseBundle,
+    progress: Callable[[int, str], None] | None = None,
+) -> list[UpdateStatus]:
+    """Aplica todas as novidades do catálogo e desfaz o lote se alguma falhar."""
+    root = Path(data_root).resolve()
+    db = Path(database).resolve()
+    pending = _pending_release_packages(catalog, root, db)
+    if not pending:
+        if progress is not None:
+            progress(100, "Bases Plugin aplicado e validado.")
+        return []
+    if db.parent != root:
+        raise UpdateError(
+            "A pasta de dados e o banco SQLite selecionados são incompatíveis."
+        )
+    if root.exists() and not root.is_dir():
+        raise UpdateError("O destino das bases locais não é uma pasta válida.")
+    if db.exists() and not db.is_file():
+        raise UpdateError("O destino do banco SQLite não é um arquivo válido.")
+
+    batch_lock = _acquire_update_lock(root)
+    try:
+        pending = _pending_release_packages(catalog, root, db)
+        if not pending:
+            if progress is not None:
+                progress(100, "Bases Plugin aplicado e validado.")
+            return []
+
+        if db.exists() and not db.is_file():
+            raise UpdateError("O destino do banco SQLite não é um arquivo válido.")
+        registry_before = _registry_file_snapshot(root)
+        history_root = root / HISTORY_DIRECTORY
+        history_directories_before = {
+            history.relative_to(history_root).as_posix()
+            for history in history_root.glob("*/*")
+            if history.is_dir()
+        }
+        database_created = not db.exists()
+        if database_created:
+            try:
+                connection = connect(db)
+                try:
+                    initialize(connection)
+                finally:
+                    connection.close()
+            except (OSError, sqlite3.Error, ValueError) as exc:
+                try:
+                    _remove_database_files(db)
+                except OSError as cleanup_exc:
+                    raise UpdateError(
+                        "A inicialização do banco local falhou e a cópia incompleta "
+                        "não pôde ser removida. Solicite suporte técnico."
+                    ) from cleanup_exc
+                raise UpdateError(
+                    "Não foi possível inicializar o banco local para instalar as bases."
+                ) from exc
+
+        history_before = {point.restore_id for point in list_restore_points(root, db)}
+        applied: list[UpdateStatus] = []
+        total = len(pending)
+        try:
+            for index, package in enumerate(pending):
+
+                def package_progress(
+                    value: int, message: str, *, offset: int = index
+                ) -> None:
+                    if progress is not None:
+                        aggregate = int(((offset + value / 100) / max(total, 1)) * 100)
+                        progress(aggregate, message)
+
+                applied.append(
+                    LocalUpdater(root, db, client, progress=package_progress)._apply(
+                        package, acquire_lock=False
+                    )
+                )
+            if progress is not None:
+                progress(100, "Bases Plugin aplicado e validado.")
+            return applied
+        except Exception as exc:
+            rollback_errors: list[str] = []
+            release_points = [
+                point
+                for point in list_restore_points(root, db)
+                if point.restore_id not in history_before
+            ]
+            if release_points:
+                restorer = LocalRestorer(root, db)
+                for point in release_points:
+                    try:
+                        restorer._restore_point(
+                            point, require_latest=False, acquire_lock=False
+                        )
+                    except Exception as rollback_exc:  # pragma: no cover
+                        rollback_errors.append(str(rollback_exc))
+            try:
+                _restore_registry_file(root, registry_before)
+            except OSError as rollback_exc:  # pragma: no cover - falha dupla rara
+                rollback_errors.append(str(rollback_exc))
+            if database_created and not rollback_errors:
+                try:
+                    _remove_database_files(db)
+                except OSError as rollback_exc:  # pragma: no cover - falha dupla rara
+                    rollback_errors.append(str(rollback_exc))
+            if rollback_errors:
+                raise UpdateError(
+                    "A publicação falhou e nem todas as bases puderam ser restauradas. "
+                    "Interrompa o uso e solicite suporte técnico."
+                ) from exc
+            for history in history_root.glob("*/*"):
+                if (
+                    history.is_dir()
+                    and history.relative_to(history_root).as_posix()
+                    not in history_directories_before
+                ):
+                    shutil.rmtree(history, ignore_errors=True)
+            raise UpdateError(
+                "A publicação não foi aplicada; as bases anteriores foram restauradas. "
+                f"Motivo: {exc}"
+            ) from exc
+    finally:
+        _release_update_lock(batch_lock)
 
 
 def file_sha256_bytes(content: bytes) -> str:
