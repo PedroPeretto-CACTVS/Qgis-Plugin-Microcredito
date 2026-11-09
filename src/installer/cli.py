@@ -6,6 +6,7 @@ from typing import Annotated
 
 import typer
 
+from installer.base_release import build_base_release
 from installer.constants import PLUGIN_VERSION
 from installer.install import configure_data_paths, install_package, qgis_is_running
 from installer.local_bases import install_local_bases
@@ -18,6 +19,9 @@ from installer.update_package import (
     build_update_package,
 )
 from installer.verify import verify_package
+from qgis_plugin_microcredito.infrastructure.updates import (
+    PUBLISHER_PUBLIC_KEY_PEM,
+)
 
 app = typer.Typer(
     help="Instalador e empacotador do CAR Microcrédito", no_args_is_help=True
@@ -126,6 +130,33 @@ def update_package_cmd(
         provides=tuple(provides or ()) or None,
         payload_scopes=_value_map(payload_scope or [], "--payload-scope"),
         foreign_feature_count=foreign_feature_count,
+    )
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+@app.command("base-release")
+def base_release_cmd(
+    catalog: Annotated[Path, typer.Option()],
+    signature: Annotated[Path, typer.Option()],
+    package: Annotated[
+        list[str], typer.Option("--package", help="ID=CAMINHO; opção repetível")
+    ],
+    output: Annotated[Path, typer.Option()],
+    public_key: Annotated[Path | None, typer.Option("--public-key")] = None,
+) -> None:
+    """Monta um .carbases offline a partir de catálogo e pacotes assinados."""
+    package_paths = _payload_map(package)
+    key = (
+        public_key.read_text(encoding="ascii")
+        if public_key is not None
+        else PUBLISHER_PUBLIC_KEY_PEM
+    )
+    result = build_base_release(
+        catalog,
+        signature,
+        package_paths,
+        output,
+        key,
     )
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
