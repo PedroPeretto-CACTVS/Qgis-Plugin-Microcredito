@@ -138,7 +138,7 @@ def test_installed_fixed_bases_are_queried_after_package_moves(
         assert not critical.called, critical.call_args
         assert window.table.rowCount() == 1
         assert window.table.item(0, 1).text() == SYNTHETIC_CAR
-        assert Path(window.db_path.text()).resolve() == paths.database.resolve()
-        assert Path(window.car_base_path.text()).resolve() == paths.car.resolve()
+        assert window.local_paths.database.resolve() == paths.database.resolve()
+        assert window.local_paths.car.resolve() == paths.car.resolve()
     finally:
         window.close()

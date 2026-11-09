@@ -4,6 +4,7 @@ pytest.importorskip("qgis.core")
 pytestmark = pytest.mark.qgis
 
 import json
+import os
 import unittest
 import zipfile
 from pathlib import Path
@@ -42,6 +43,9 @@ from plugin.report import (
 )
 from plugin.worker import EnvironmentalWorker
 from qgis_plugin_microcredito.application.import_service import import_file
+from qgis_plugin_microcredito.application.local_data_paths import (
+    default_local_data_paths,
+)
 
 
 def isolated_qsettings(*_args, **_kwargs):
@@ -66,6 +70,12 @@ class QgisRegressionTests(unittest.TestCase):
         self.root = Path(".test-data") / uuid4().hex
         self.root.mkdir(parents=True)
         TEST_DIRECTORIES.append(self.root.resolve())
+        self.local_app_data = patch.dict(
+            os.environ, {"LOCALAPPDATA": str(self.root / "local-app-data")}
+        )
+        self.local_app_data.start()
+        self.addCleanup(self.local_app_data.stop)
+        Path(os.environ["LOCALAPPDATA"]).mkdir(parents=True, exist_ok=True)
 
     def tearDown(self):
         pass  # O pool OGR pode manter arquivos abertos até QgsApplication.exitQgis.
@@ -96,7 +106,7 @@ class QgisRegressionTests(unittest.TestCase):
         )
         window.close()
 
-    def test_reused_search_window_refreshes_paths_from_qsettings(self):
+    def test_reused_search_window_ignores_legacy_path_settings(self):
         class RuntimeSettings:
             def __init__(self):
                 self.values = {
@@ -115,44 +125,33 @@ class QgisRegressionTests(unittest.TestCase):
                 self.values[key] = value
 
         window = plugin.SearchWindow(Iface())
-        window.db_path.setText(r"C:\antigo\OneDrive\car_microcredito.db")
-        window.car_base_path.setText(r"C:\antigo\OneDrive\car")
         window.settings = RuntimeSettings()
         application = plugin.CarMicrocreditoPlugin(Iface())
         application.window = window
 
         application.show_window()
 
-        self.assertEqual(window.settings.sync_calls, 1)
-        self.assertEqual(
-            window.db_path.text(),
-            r"C:\Projetos\QGIS-Microcredito-Dados\car_microcredito.db",
-        )
-        self.assertEqual(
-            window.car_base_path.text(), r"C:\Projetos\QGIS-Microcredito-Dados\car"
-        )
+        fixed = default_local_data_paths()
+        self.assertEqual(window.settings.sync_calls, 0)
+        self.assertEqual(window.local_paths.database, fixed.database)
+        self.assertEqual(window.local_paths.car, fixed.car)
         window.close()
 
-    def test_runtime_paths_file_overrides_stale_user_settings(self):
-        database = self.root / "dados" / "car_microcredito.db"
+    def test_fixed_paths_ignore_legacy_preferences_without_runtime_file(self):
+        fixed = default_local_data_paths()
+        database = fixed.database
         database.parent.mkdir(parents=True)
         database.touch()
-        car_base = self.root / "car"
+        car_base = fixed.car
         car_base.mkdir()
-        runtime_paths = self.root / "runtime_paths.json"
-        runtime_paths.write_text(
-            json.dumps({"database": str(database), "car_base": str(car_base)}),
-            encoding="utf-8",
-        )
         window = plugin.SearchWindow(Iface())
-        window.db_path.setText(r"C:\antigo\OneDrive\car_microcredito.db")
-        window.car_base_path.setText(r"C:\antigo\OneDrive\car")
+        window.settings.setValue("database", r"C:\antigo\OneDrive\car_microcredito.db")
+        window.settings.setValue("car_base", r"C:\antigo\OneDrive\car")
 
-        with patch.object(plugin, "RUNTIME_PATHS_FILE", runtime_paths):
-            window.reload_local_paths()
+        window.reload_local_paths()
 
-        self.assertEqual(window.db_path.text(), str(database))
-        self.assertEqual(window.car_base_path.text(), str(car_base))
+        self.assertEqual(window.local_paths.database, database)
+        self.assertEqual(window.local_paths.car, car_base)
         window.close()
 
     def layer(self, polygons, crs="EPSG:3857"):
@@ -467,7 +466,8 @@ class QgisRegressionTests(unittest.TestCase):
         self.assertEqual(payload["quantidade_analises"], 0)
 
     def test_stale_selected_operation_never_supplies_other_car_geometry(self):
-        database = self.root / "dados" / "test.db"
+        database = default_local_data_paths().database
+        database.parent.mkdir(parents=True, exist_ok=True)
         connection = connect(database)
         initialize(connection)
         source = self.root / "properties.csv"
@@ -477,7 +477,6 @@ class QgisRegressionTests(unittest.TestCase):
         import_file(connection, "propriedades", source)
         connection.close()
         window = plugin.SearchWindow(Iface())
-        window.db_path.setText(str(database))
         window.results = [
             {
                 "car_original": "MT-AAA",
@@ -507,12 +506,12 @@ class QgisRegressionTests(unittest.TestCase):
         window.close()
 
     def test_missing_owner_blocks_final_report_before_directory_prompt(self):
-        database = self.root / "dados" / "test.db"
+        database = default_local_data_paths().database
+        database.parent.mkdir(parents=True, exist_ok=True)
         connection = connect(database)
         initialize(connection)
         connection.close()
         window = plugin.SearchWindow(Iface())
-        window.db_path.setText(str(database))
         window.car.setText("MT-TESTE")
 
         with (
@@ -568,23 +567,23 @@ class QgisRegressionTests(unittest.TestCase):
         return path
 
     def batch(self):
-        database = self.root / "dados" / "test.db"
+        fixed = default_local_data_paths()
+        database = fixed.database
+        database.parent.mkdir(parents=True, exist_ok=True)
         db = connect(database)
         initialize(db)
         db.close()
-        car_dir = self.root / "car"
-        car_dir.mkdir()
+        car_dir = fixed.car
+        car_dir.mkdir(parents=True, exist_ok=True)
         window = batch_window.BatchWindow(Iface(), plugin._load_core)
-        window.db_path.setText(str(database))
-        window.car_base_path.setText(str(car_dir))
         window.output_path.setText(str(self.root / "out"))
         window.include_maps.setChecked(False)
         return window
 
     def test_batch_clear_query_preserves_configured_directories(self):
         window = self.batch()
-        database = window.db_path.text()
-        car_base = window.car_base_path.text()
+        database = window.local_paths.database
+        car_base = window.local_paths.car
         output = window.output_path.text()
         window.xlsx_path.setText(
             str(self.write_sheet(self.root / "batch.xlsx", ["MT-AAA"]))
@@ -602,8 +601,8 @@ class QgisRegressionTests(unittest.TestCase):
         self.assertEqual(window.progress.value(), 0)
         self.assertEqual(
             (
-                window.db_path.text(),
-                window.car_base_path.text(),
+                window.local_paths.database,
+                window.local_paths.car,
                 window.output_path.text(),
             ),
             (database, car_base, output),

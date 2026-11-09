@@ -47,6 +47,9 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from qgis_plugin_microcredito.application.local_data_paths import (
+    default_local_data_paths,
+)
 from qgis_plugin_microcredito.domain.policy import (
     aggregate,
     compatible_operation,
@@ -72,6 +75,7 @@ from qgis_plugin_microcredito.domain.financing import (
 )
 
 from .analysis import default_sources
+from .base_access import with_base_access
 from .car_source import (
     add_google_satellite,
     car_feature_context,
@@ -91,7 +95,6 @@ from .report import write_report
 from .worker import run_environment
 
 SUPREME_MODE = (Path(__file__).parent / "supreme_mode.txt").is_file()
-RUNTIME_PATHS_FILE = Path(__file__).with_name("runtime_paths.json")
 
 RESOURCE_SOURCE_OPTIONS = (
     ("Automática pela UF do CAR — sugestão", AUTOMATIC_RESOURCE_SOURCE),
@@ -107,24 +110,6 @@ CREDIT_LINE_OPTIONS = (
 def normalized_document_value(value: object) -> str:
     digits = "".join(char for char in str(value or "") if char.isdigit())
     return digits if len(digits) in (11, 14) else ""
-
-
-def runtime_local_paths() -> dict[str, str]:
-    """Lê caminhos fixados pela instalação local, sem depender do QSettings."""
-    try:
-        payload = json.loads(RUNTIME_PATHS_FILE.read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    paths = {}
-    database = str(payload.get("database") or "").strip()
-    car_base = str(payload.get("car_base") or "").strip()
-    if database and Path(database).is_file():
-        paths["database"] = database
-    if car_base and Path(car_base).is_dir():
-        paths["car_base"] = car_base
-    return paths
 
 
 def documents_for_mte(associated_documents, *additional_values) -> list[str]:
@@ -252,6 +237,7 @@ class SearchWindow(QDialog):
         self._technical_decision = None
         self._technical_decision_car = ""
         self.settings = QSettings("Cactvs", "CARMicrocredito")
+        self.local_paths = default_local_data_paths()
         self.setWindowTitle("CAR Microcrédito | Apoio à decisão socioambiental")
         self.setWindowIcon(QIcon(str(Path(__file__).parent / "icon.svg")))
         self.setWindowFlags(self.windowFlags() | Qt.Window)
@@ -272,10 +258,6 @@ class SearchWindow(QDialog):
             QPushButton:hover { background: #edf5f1; border-color: #2b7a59; }
             QPushButton#primary { background: #19734f; color: white; border-color: #165c41; }
             QPushButton#primary:hover { background: #135d40; }
-            QPushButton#baseLocalToggle { min-height: 28px; padding: 0 10px; text-align: left;
-                                          background: #e7f0ec; color: #25483b;
-                                          border-color: #b8cbc3; font-weight: 700; }
-            QPushButton#baseLocalToggle:hover { background: #dceae4; border-color: #2b7a59; }
             QTableWidget { background: white; border: 1px solid #ccd8d3; border-radius: 6px;
                            gridline-color: #e0e7e4; alternate-background-color: #f4f8f6; }
             QHeaderView::section { background: #e7f0ec; color: #25483b; padding: 7px;
@@ -288,33 +270,6 @@ class SearchWindow(QDialog):
             QLabel#status[statusLevel="neutral"] { background: #edf5f1; color: #25483b; border: 0; }
             QLabel#notice { color: #65736e; padding: 2px; }
         """)
-
-        self.db_path = QLineEdit()
-        saved_db = self.settings.value("database", "", type=str)
-        self.db_path.setText(saved_db)
-        self.db_path.setPlaceholderText("Selecione o arquivo car_microcredito.db")
-        choose_db = QPushButton("Selecionar…")
-        choose_db.clicked.connect(self.select_database)
-
-        db_row = QHBoxLayout()
-        db_row.addWidget(self.db_path, 1)
-        db_row.addWidget(choose_db)
-
-        self.car_base_path = QLineEdit()
-        saved_car_base = self.settings.value("car_base", "", type=str)
-        if not saved_car_base and saved_db:
-            automatic_car_base = Path(saved_db).resolve().parent / "car"
-            if automatic_car_base.is_dir():
-                saved_car_base = str(automatic_car_base)
-        self.car_base_path.setText(saved_car_base)
-        self.car_base_path.setPlaceholderText(
-            "Pasta com GeoPackage, SHP ou GeoJSON baixados do SICAR"
-        )
-        choose_car_base = QPushButton("Selecionar…")
-        choose_car_base.clicked.connect(self.select_car_base)
-        car_base_row = QHBoxLayout()
-        car_base_row.addWidget(self.car_base_path, 1)
-        car_base_row.addWidget(choose_car_base)
 
         self.document = QLineEdit()
         self.document.setPlaceholderText("CPF ou CNPJ")
@@ -467,8 +422,6 @@ class SearchWindow(QDialog):
         processing_row.addWidget(self.processing_label, 1)
         processing_row.addWidget(self.processing_bar, 2)
         self.interactive_controls = [
-            choose_db,
-            choose_car_base,
             search,
             search_mma,
             search_car_document,
@@ -500,26 +453,7 @@ class SearchWindow(QDialog):
             title_row.addWidget(open_batch)
             self.interactive_controls.append(open_batch)
 
-        self.database_toggle = QPushButton()
-        self.database_toggle.setObjectName("baseLocalToggle")
-        self.database_toggle.setCheckable(True)
-        self.database_panel = QGroupBox()
-        self.database_panel.setObjectName("baseLocalPanel")
-        database_layout = QFormLayout(self.database_panel)
-        database_layout.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        database_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        database_layout.addRow("Banco SQLite", db_row)
-        database_layout.addRow("Polígonos do CAR", car_base_row)
-        expanded = self.settings.value("base_local_expanded", False, type=bool)
-        paths_valid = Path(saved_db).is_file() and Path(saved_car_base).is_dir()
-        self.database_toggle.setChecked(expanded or not paths_valid)
-        self._set_base_local_expanded(
-            self.database_toggle.isChecked(), persist=False
-        )
-        self.database_toggle.toggled.connect(self._set_base_local_expanded)
-        self.interactive_controls.append(self.database_toggle)
-
-        query_group = QGroupBox("2. Identificar operação")
+        query_group = QGroupBox("1. Identificar operação")
         query_layout = QFormLayout(query_group)
         query_layout.setRowWrapPolicy(QFormLayout.WrapLongRows)
         query_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
@@ -533,7 +467,7 @@ class SearchWindow(QDialog):
         query_layout.addRow("Link do Google Maps", maps_row)
         query_layout.addRow("Retorno MMA/MCR", self.mma_result)
 
-        results_group = QGroupBox("3. Operações encontradas")
+        results_group = QGroupBox("2. Operações encontradas")
         results_group.setMinimumHeight(190)
         results_layout = QVBoxLayout(results_group)
         self.notice.setMaximumHeight(48)
@@ -547,8 +481,6 @@ class SearchWindow(QDialog):
         top_layout = QVBoxLayout(top_content)
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(8)
-        top_layout.addWidget(self.database_toggle)
-        top_layout.addWidget(self.database_panel)
         top_layout.addWidget(query_group)
         top_scroll = QScrollArea()
         top_scroll.setWidgetResizable(True)
@@ -599,25 +531,8 @@ class SearchWindow(QDialog):
         self._update_resource_source_suggestion()
 
     def reload_local_paths(self) -> None:
-        """Atualiza os campos quando outra sessão alterou a configuração local."""
-        self.settings.sync()
-        runtime_paths = runtime_local_paths()
-        saved_db = runtime_paths.get("database") or self.settings.value(
-            "database", "", type=str
-        )
-        saved_car_base = runtime_paths.get("car_base") or self.settings.value(
-            "car_base", "", type=str
-        )
-        if not saved_car_base and saved_db:
-            automatic_car_base = Path(saved_db).resolve().parent / "car"
-            if automatic_car_base.is_dir():
-                saved_car_base = str(automatic_car_base)
-        self.db_path.setText(saved_db)
-        self.car_base_path.setText(saved_car_base)
-        if runtime_paths:
-            self.settings.setValue("database", saved_db)
-            self.settings.setValue("car_base", saved_car_base)
-            self.settings.sync()
+        """Atualiza a raiz local única, independente de preferências antigas."""
+        self.local_paths = default_local_data_paths()
 
     def open_batch_window(self):
         if self.batch_window is None:
@@ -627,19 +542,6 @@ class SearchWindow(QDialog):
         self.batch_window.show()
         self.batch_window.raise_()
         self.batch_window.activateWindow()
-
-    def _set_base_local_expanded(
-        self, expanded: bool, persist: bool = True
-    ) -> None:
-        self.database_panel.setVisible(expanded)
-        arrow = "▼" if expanded else "▶"
-        action = "ocultar" if expanded else "mostrar"
-        self.database_toggle.setText(f"{arrow} 1. Configuração da base local")
-        self.database_toggle.setAccessibleName(
-            f"Configuração da base local; {action} opções"
-        )
-        if persist:
-            self.settings.setValue("base_local_expanded", expanded)
 
     def _update_resource_source_suggestion(self) -> None:
         index = self.fund.findData(AUTOMATIC_RESOURCE_SOURCE)
@@ -666,7 +568,6 @@ class SearchWindow(QDialog):
             from .car_document_window import CarDocumentWindow
 
             self.car_document_window = CarDocumentWindow(self.iface, _load_core)
-        self.car_document_window.database.setText(self.db_path.text())
         self.car_document_window.car.setText(self.car.text())
         self.car_document_window.show()
         self.car_document_window.raise_()
@@ -730,7 +631,7 @@ class SearchWindow(QDialog):
     def _select_report_directory(self, chooser=None) -> Path | None:
         default_dir = self.settings.value(
             "report_output_dir",
-            str(Path(self.db_path.text()).resolve().parent.parent / "output" / "pdf"),
+            str(self.local_paths.root / "output" / "pdf"),
             type=str,
         )
         chooser = chooser or QFileDialog.getExistingDirectory
@@ -764,22 +665,6 @@ class SearchWindow(QDialog):
         self._processing_outcome = None
         self._focus_after_processing = None
         QApplication.processEvents()
-
-    def select_database(self):
-        selected, _ = QFileDialog.getOpenFileName(
-            self, "Selecionar banco", "", "SQLite (*.db *.sqlite)"
-        )
-        if selected:
-            self.db_path.setText(selected)
-            self.settings.setValue("database", selected)
-
-    def select_car_base(self):
-        selected = QFileDialog.getExistingDirectory(
-            self, "Selecionar pasta das bases do CAR"
-        )
-        if selected:
-            self.car_base_path.setText(selected)
-            self.settings.setValue("car_base", selected)
 
     @staticmethod
     def _car_choices(candidates: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -920,16 +805,13 @@ class SearchWindow(QDialog):
                 self.table.selectRow(row)
                 break
 
+    @with_base_access
     def search_car_by_point(self):
         self._begin_processing("Procurando o CAR que contém a coordenada…")
         try:
             latitude = float(self.latitude.text().strip().replace(",", "."))
             longitude = float(self.longitude.text().strip().replace(",", "."))
-            directory = self.car_base_path.text().strip()
-            if not directory and self.db_path.text().strip():
-                directory = str(Path(self.db_path.text()).resolve().parent / "car")
-                self.car_base_path.setText(directory)
-            matches = find_cars_by_point(directory, latitude, longitude)
+            matches = find_cars_by_point(str(self.local_paths.car), latitude, longitude)
             if not matches:
                 self.notice.setText(
                     "Nenhum polígono do SICAR instalado contém o ponto informado."
@@ -1016,17 +898,10 @@ class SearchWindow(QDialog):
         self.iface.mapCanvas().refresh()
 
     def _car_geometry(self, output_dir: Path):
-        directory = self.car_base_path.text().strip()
-        if not directory and self.db_path.text().strip():
-            automatic = Path(self.db_path.text()).resolve().parent / "car"
-            if automatic.is_dir():
-                directory = str(automatic)
-                self.car_base_path.setText(directory)
-        if not directory or not self.car.text().strip():
+        if not self.car.text().strip():
             return None
-        self.settings.setValue("car_base", directory)
         return export_car_feature(
-            directory,
+            self.local_paths.car,
             self.car.text(),
             output_dir
             / f"car_{normalize_car(self.car.text())}_{uuid4().hex[:12]}.geojson",
@@ -1034,20 +909,17 @@ class SearchWindow(QDialog):
 
     def _connection(self):
         connect, initialize, _, _, _, _, _, _ = _load_core()
-        database = self.db_path.text().strip()
-        if not database:
+        database = self.local_paths.database
+        if not database.is_file():
             raise ValueError(
-                "Selecione o banco car_microcredito.db antes de continuar."
+                "As bases locais ainda não foram instaladas. "
+                "Abra ‘Bases de consulta e atualizações’ e aplique um Bases Plugin."
             )
-        if not Path(database).is_file():
-            raise ValueError(
-                "O banco selecionado não existe. Selecione o arquivo car_microcredito.db do projeto."
-            )
-        self.settings.setValue("database", database)
         connection = connect(database)
         initialize(connection)
         return connection
 
+    @with_base_access
     def search(self):
         self._begin_processing("Consultando operações e vínculos no Sicor…")
         try:
@@ -1086,6 +958,7 @@ class SearchWindow(QDialog):
         finally:
             self._end_processing()
 
+    @with_base_access
     def search_mma(self):
         self._begin_processing("Consultando a publicação MMA/MCR…")
         try:
@@ -1116,14 +989,9 @@ class SearchWindow(QDialog):
         self.mma_result.update()
 
     def _local_car_context(self) -> dict[str, object]:
-        directory = self.car_base_path.text().strip()
-        if not directory and self.db_path.text().strip():
-            automatic = Path(self.db_path.text()).resolve().parent / "car"
-            if automatic.is_dir():
-                directory = str(automatic)
-        if not directory or not self.car.text().strip():
+        if not self.car.text().strip():
             return {}
-        return car_feature_context(directory, self.car.text())
+        return car_feature_context(self.local_paths.car, self.car.text())
 
     def _fill_table(self):
         self.table.setSortingEnabled(False)
@@ -1163,11 +1031,12 @@ class SearchWindow(QDialog):
                 "neutral",
             )
 
+    @with_base_access
     def load_selected_plots(self):
         result = self._selected_result()
         self._begin_processing("Localizando e carregando a geometria no mapa…")
         try:
-            project_root = Path(self.db_path.text()).resolve().parent.parent
+            project_root = self.local_paths.root
             car_geometry = self._car_geometry(project_root / "resultados")
             if car_geometry:
                 self._load_map_context(car_geometry)
@@ -1196,7 +1065,7 @@ class SearchWindow(QDialog):
                     "A operação selecionada não possui polígono válido na base importada.",
                 )
                 return
-            output_dir = Path(self.db_path.text()).resolve().parent / "exportacoes"
+            output_dir = self.local_paths.root / "exportacoes"
             output_dir.mkdir(parents=True, exist_ok=True)
             output = (
                 output_dir
@@ -1260,9 +1129,7 @@ class SearchWindow(QDialog):
         group = root.insertGroup(0, group_name)
 
         total_nearby = total_intersections = loaded_layers = 0
-        sources = default_sources(
-            Path(self.db_path.text()).resolve().parent / "ambientais"
-        )
+        sources = default_sources(self.local_paths.environmental)
         for index, source in enumerate(sources):
             source_layer = QgsVectorLayer(str(source.path), source.name, "ogr")
             if not source_layer.isValid():
@@ -1612,6 +1479,7 @@ class SearchWindow(QDialog):
     def _show_interference_preview(self, analysis: dict[str, object]):
         self._interference_preview_dialog(analysis).exec()
 
+    @with_base_access
     def analyze_selected(self, mode: str = "final"):
         result = self._selected_result()
         if not compatible_operation(result, self.car.text()):
@@ -1732,7 +1600,7 @@ class SearchWindow(QDialog):
                 "estado": "",
                 "municipio_ibge": "",
             }
-            project_root = Path(self.db_path.text()).resolve().parent.parent
+            project_root = self.local_paths.root
             geo_dir = project_root / "resultados"
             geo_dir.mkdir(parents=True, exist_ok=True)
             safe_key = normalize_car(self.car.text()) + "_" + uuid4().hex[:12]
@@ -1777,9 +1645,7 @@ class SearchWindow(QDialog):
             )
             environmental = run_environment(
                 target_path,
-                default_sources(
-                    Path(self.db_path.text()).resolve().parent / "ambientais"
-                ),
+                default_sources(self.local_paths.environmental),
             )
             self._processing_step(
                 "Cruzamentos territoriais concluídos. Preparando o mapa…"
@@ -1837,9 +1703,7 @@ class SearchWindow(QDialog):
             map_legend = []
             map_path = render_analysis_map(
                 target_path,
-                default_sources(
-                    Path(self.db_path.text()).resolve().parent / "ambientais"
-                ),
+                default_sources(self.local_paths.environmental),
                 report_dir / f"{preview_prefix}mapa_car_{safe_key}.png",
                 legend_entries=map_legend,
             )
