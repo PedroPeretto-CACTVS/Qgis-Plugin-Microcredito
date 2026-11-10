@@ -31,7 +31,9 @@ def _run_worker(
 
 
 def _events(process: subprocess.CompletedProcess[str]) -> list[dict[str, object]]:
-    return [json.loads(line) for line in process.stdout.splitlines() if line.strip()]
+    """Read operation events independently of optional liveness messages."""
+    events = [json.loads(line) for line in process.stdout.splitlines() if line.strip()]
+    return [event for event in events if event["event"] != "heartbeat"]
 
 
 def test_validate_invalid_release_reports_protocol_error_without_creating_database(
