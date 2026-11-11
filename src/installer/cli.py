@@ -13,6 +13,7 @@ from installer.local_bases import install_local_bases
 from installer.package_build import build_package
 from installer.plugin_build import main as plugin_build_main
 from installer.prebuilt_bases import prepare_prebuilt_bases
+from installer.prebuilt_release import build_prebuilt_release
 from installer.update_package import (
     STRATEGIES,
     _payload_map,
@@ -193,6 +194,28 @@ def prepare_bases_cmd(
             {"manifest": str(manifest), "status": "candidate"}, ensure_ascii=False
         )
     )
+
+
+@app.command("prebuilt-release")
+def prebuilt_release_cmd(
+    candidate: Annotated[Path, typer.Option(exists=True, file_okay=False)],
+    output: Annotated[Path, typer.Option()],
+    public_key: Annotated[
+        Path | None, typer.Option("--public-key", exists=True, dir_okay=False)
+    ] = None,
+) -> None:
+    """Monta o .carbases pré-montado com manifesto de integridade obrigatório."""
+    key = (
+        public_key.read_text(encoding="ascii")
+        if public_key
+        else PUBLISHER_PUBLIC_KEY_PEM
+    )
+    try:
+        result = build_prebuilt_release(candidate, output, key)
+    except (ValueError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 def main() -> None:
