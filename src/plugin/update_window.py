@@ -619,6 +619,12 @@ class UpdateWindow(QDialog):
         self._update_apply_button()
         self._update_restore_button()
 
+    def reject(self) -> None:
+        """Mantém a janela ocupada aberta também ao pressionar Esc."""
+        if self.worker is not None and self.worker.isRunning():
+            return
+        super().reject()
+
     def closeEvent(self, event):
         if self.worker is not None and self.worker.isRunning():
             QMessageBox.information(self, "Atualização em andamento", "Aguarde a conclusão da atualização antes de fechar esta janela.")

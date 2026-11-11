@@ -8,7 +8,8 @@ import pytest
 pytest.importorskip("qgis.core")
 pytestmark = pytest.mark.qgis
 
-from qgis.PyQt.QtCore import QCoreApplication, QEvent, QEventLoop, QSettings, QTimer
+from qgis.PyQt.QtCore import QCoreApplication, QEvent, QEventLoop, QSettings, Qt, QTimer
+from qgis.PyQt.QtTest import QTest
 from qgis.PyQt.QtWidgets import QMainWindow, QMessageBox, QPushButton
 from test.update_process_support import write_signed_release
 
@@ -249,4 +250,66 @@ def test_window_and_qgis_close_wait_for_the_external_job(tmp_path, monkeypatch):
         main_window.close()
         window.deleteLater()
         main_window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+
+
+@pytest.mark.parametrize("dismissal", ["escape", "reject"])
+def test_busy_window_reject_waits_for_external_job(tmp_path, monkeypatch, dismissal):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setattr(
+        update_window,
+        "QSettings",
+        lambda *_args, **_kwargs: QSettings(
+            str(tmp_path / "settings.ini"), QSettings.IniFormat
+        ),
+    )
+
+    class Iface:
+        @staticmethod
+        def mainWindow():
+            return None
+
+    release = tmp_path / "invalido.carbases"
+    release.write_bytes(b"invalid")
+    window = UpdateWindow(Iface())
+    window.release_path.setText(str(release))
+    loop = QEventLoop()
+    timeout = QTimer()
+    timeout.setSingleShot(True)
+    timeout.timeout.connect(loop.quit)
+
+    def dismiss():
+        if dismissal == "escape":
+            QTest.keyClick(window, Qt.Key_Escape)
+        else:
+            window.reject()
+
+    try:
+        with (
+            patch.object(QMessageBox, "information"),
+            patch.object(QMessageBox, "warning"),
+        ):
+            window.show()
+            window.refresh_catalog()
+            job = window.worker
+            assert job is not None and job.isRunning()
+            job.finished.connect(loop.quit)
+            timeout.start(15000)
+            dismiss()
+            remained_visible = window.isVisible()
+            remained_running = job.isRunning()
+            loop.exec_()
+            assert not job.isRunning()
+            assert remained_running
+            assert remained_visible, "A janela ocupada deve ignorar Esc/reject."
+            assert window.isVisible()
+            dismiss()
+            assert not window.isVisible()
+    finally:
+        timeout.stop()
+        if window.worker is not None and window.worker.isRunning():
+            window.worker.process.kill()
+            window.worker.process.waitForFinished(5000)
+        window.close()
+        window.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
