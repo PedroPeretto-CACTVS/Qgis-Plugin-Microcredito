@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
+from installer.base_release import build_base_release
 from installer.update_package import build_update_package
+from qgis_plugin_microcredito.infrastructure.updates import (
+    TEST_PUBLISHER_PUBLIC_KEY_PEM,
+)
 
 
 def test_build_update_package_records_payload_and_hash(tmp_path: Path) -> None:
@@ -29,6 +33,107 @@ def test_build_update_package_records_payload_and_hash(tmp_path: Path) -> None:
         assert manifest["schema_version"] == 1
         assert manifest["id"] == "mte"
         assert archive.testzip() is None
+
+
+def test_build_base_release_contains_only_signed_catalog_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "mte.zip"
+    package.write_bytes(b"pacote-validado")
+    import hashlib
+
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "issued_at": "2026-10-15T12:00:00-03:00",
+                "expires_at": "2027-10-15T12:00:00-03:00",
+                "packages": [
+                    {
+                        "id": "mte",
+                        "label": "Cadastro MTE",
+                        "version": "2026.10.06",
+                        "strategy": "import_mte",
+                        "url": "carbases://packages/mte.zip",
+                        "sha256": hashlib.sha256(package.read_bytes()).hexdigest(),
+                        "size_bytes": package.stat().st_size,
+                        "validity_until": "2027-04-05",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    signature = tmp_path / "catalog.json.sig"
+    signature.write_bytes(b"assinatura")
+    monkeypatch.setattr(
+        "installer.base_release.verify_catalog_signature",
+        lambda *_args: None,
+    )
+
+    destination = tmp_path / "bases-2026-10.carbases"
+    result = build_base_release(
+        catalog,
+        signature,
+        {"mte": package},
+        destination,
+        TEST_PUBLISHER_PUBLIC_KEY_PEM,
+    )
+
+    assert result["packages"] == 1
+    assert result["size_bytes"] == destination.stat().st_size
+    with zipfile.ZipFile(destination) as archive:
+        assert set(archive.namelist()) == {
+            "catalog.json",
+            "catalog.json.sig",
+            "packages/mte.zip",
+        }
+
+
+def test_build_base_release_rejects_package_not_declared_by_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "issued_at": "2026-10-15T12:00:00-03:00",
+                "expires_at": "2027-10-15T12:00:00-03:00",
+                "packages": [
+                    {
+                        "id": "mte",
+                        "label": "Cadastro MTE",
+                        "version": "2026.10.06",
+                        "strategy": "import_mte",
+                        "url": "https://publisher.example/mte.zip",
+                        "sha256": "a" * 64,
+                        "size_bytes": 123,
+                        "validity_until": "2027-04-05",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    signature = tmp_path / "catalog.json.sig"
+    signature.write_bytes(b"assinatura")
+    unexpected = tmp_path / "inesperado.zip"
+    unexpected.write_bytes(b"x")
+    monkeypatch.setattr(
+        "installer.base_release.verify_catalog_signature",
+        lambda *_args: None,
+    )
+
+    with pytest.raises(ValueError, match="exatamente os pacotes"):
+        build_base_release(
+            catalog,
+            signature,
+            {"inesperado": unexpected},
+            tmp_path / "release.carbases",
+            TEST_PUBLISHER_PUBLIC_KEY_PEM,
+        )
 
 
 def test_replace_file_rejects_path_traversal(tmp_path: Path) -> None:

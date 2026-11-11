@@ -1,56 +1,14 @@
 from __future__ import annotations
 
-import re
 import sqlite3
 from collections import defaultdict
 from typing import Any
 
-_NUMBER = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?")
-
-
-def _parse_group(text: str, position: int = 0) -> tuple[list[Any], int]:
-    result: list[Any] = []
-    token: list[str] = []
-    position += 1
-    while position < len(text):
-        char = text[position]
-        if char == "(":
-            child, position = _parse_group(text, position)
-            result.append(child)
-        elif char == ")":
-            if "".join(token).strip():
-                result.append("".join(token).strip())
-            return result, position + 1
-        elif char == ",":
-            if "".join(token).strip():
-                result.append("".join(token).strip())
-                token = []
-            position += 1
-        else:
-            token.append(char)
-            position += 1
-    raise ValueError("Geometria WKT com parênteses incompletos")
-
-
-def _coordinates(items: list[Any]) -> Any:
-    if items and isinstance(items[0], str):
-        points: list[list[float]] = []
-        for item in items:
-            values = _NUMBER.findall(item)
-            if len(values) >= 2:
-                points.append([float(values[0]), float(values[1])])
-        return points
-    return [_coordinates(item) for item in items]
+from qgis_plugin_microcredito.domain.wkt import parse_area_wkt
 
 
 def _wkt_geometry(wkt: str) -> dict[str, Any]:
-    upper = wkt.lstrip().upper()
-    geometry_type = "MultiPolygon" if upper.startswith("MULTIPOLYGON") else "Polygon"
-    start = wkt.find("(")
-    if start < 0:
-        raise ValueError("Geometria WKT sem coordenadas")
-    nested, _ = _parse_group(wkt, start)
-    return {"type": geometry_type, "coordinates": _coordinates(nested)}
+    return parse_area_wkt(wkt)
 
 
 def build_glebas_geojson(

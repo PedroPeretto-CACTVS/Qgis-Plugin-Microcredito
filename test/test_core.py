@@ -218,7 +218,12 @@ class CoreTests(unittest.TestCase):
             "#REF_BACEN;NU_ORDEM;NU_INDICE;GT_GEOMETRIA\n"
             "510;2;0;POLYGON Z ((-63 -11 0,-62 -11 0,-62 -12 0,-63 -11 0))\n",
         )
-        imported = import_file(self.db, "glebas", plots)
+        imported = import_file(
+            self.db,
+            "glebas",
+            plots,
+            source_reference="atualizacao-assinada:teste",
+        )
         self.assertEqual(imported.validas, 1)
         result = build_glebas_geojson(self.db, "510", "2")
         self.assertEqual(result["features"][0]["geometry"]["type"], "Polygon")
@@ -228,6 +233,107 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(
             result["features"][0]["properties"]["origem_geometria"], "sicor_glebas_wkt"
         )
+
+    def test_imports_wkt_areas_and_audits_non_area_points(self):
+        polygons = "".join(
+            f"510;2;{index};POLYGON ((-63 -11,-62 -11,-62 -12,-63 -11))\n"
+            for index in range(99)
+        )
+        plots = self._gz(
+            "glebas_wkt_with_point.gz",
+            "#REF_BACEN;NU_ORDEM;NU_INDICE;GT_GEOMETRIA\n"
+            + polygons
+            + "510;2;100;POINT (-62 -11)\n",
+        )
+
+        imported = import_file(
+            self.db,
+            "glebas",
+            plots,
+            source_reference="atualizacao-assinada:teste",
+        )
+
+        self.assertEqual(imported.validas, 99)
+        self.assertEqual(imported.rejeitadas, 1)
+        result = build_glebas_geojson(self.db, "510", "2")
+        self.assertEqual(len(result["features"]), 99)
+
+    def test_import_rejects_excess_non_area_points(self):
+        plots = self._gz(
+            "glebas_wkt_excess_points.gz",
+            "#REF_BACEN;NU_ORDEM;NU_INDICE;GT_GEOMETRIA\n"
+            "510;2;0;POLYGON ((-63 -11,-62 -11,-62 -12,-63 -11))\n"
+            "510;2;1;POINT (-62 -11)\n",
+        )
+
+        with self.assertRaisesRegex(ValueError, "limite de rejeições toleradas"):
+            import_file(
+                self.db,
+                "glebas",
+                plots,
+                source_reference="atualizacao-assinada:teste",
+            )
+
+    def test_imports_areas_and_audits_zero_area_geometry(self):
+        polygons = "".join(
+            f"510;2;{index};POLYGON ((-63 -11,-62 -11,-62 -12,-63 -11))\n"
+            for index in range(99)
+        )
+        plots = self._gz(
+            "glebas_wkt_with_zero_area.gz",
+            "#REF_BACEN;NU_ORDEM;NU_INDICE;GT_GEOMETRIA\n"
+            + polygons
+            + "510;2;100;POLYGON ((0 0,1 0,2 0,0 0))\n",
+        )
+
+        imported = import_file(
+            self.db,
+            "glebas",
+            plots,
+            source_reference="atualizacao-assinada:teste",
+        )
+
+        self.assertEqual(imported.validas, 99)
+        self.assertEqual(imported.rejeitadas, 1)
+        result = build_glebas_geojson(self.db, "510", "2")
+        self.assertEqual(len(result["features"]), 99)
+
+    def test_import_does_not_tolerate_unknown_geometry_errors(self):
+        polygons = "".join(
+            f"510;2;{index};POLYGON ((-63 -11,-62 -11,-62 -12,-63 -11))\n"
+            for index in range(99)
+        )
+        plots = self._gz(
+            "glebas_wkt_with_linestring.gz",
+            "#REF_BACEN;NU_ORDEM;NU_INDICE;GT_GEOMETRIA\n"
+            + polygons
+            + "510;2;100;LINESTRING (-62 -11,-61 -10)\n",
+        )
+
+        with self.assertRaisesRegex(ValueError, "Carga não ativada"):
+            import_file(
+                self.db,
+                "glebas",
+                plots,
+                source_reference="atualizacao-assinada:teste",
+            )
+
+    def test_import_normalizes_multipolygon_components_with_zero_area(self):
+        plots = self._gz(
+            "glebas_wkt_mixed_components.gz",
+            "#REF_BACEN;NU_ORDEM;NU_INDICE;GT_GEOMETRIA\n"
+            "510;2;0;MULTIPOLYGON (((0 0,4 0,4 4,0 0)),"
+            "((1 1,2 1,3 1,1 1)))\n",
+        )
+
+        imported = import_file(self.db, "glebas", plots)
+
+        self.assertEqual(imported.validas, 1)
+        self.assertEqual(imported.rejeitadas, 0)
+        result = build_glebas_geojson(self.db, "510", "2")
+        geometry = result["features"][0]["geometry"]
+        self.assertEqual(geometry["type"], "MultiPolygon")
+        self.assertEqual(len(geometry["coordinates"]), 1)
 
     def test_missing_required_header_rolls_back(self):
         invalid = self._gz("invalid.gz", "OUTRO;CD_CAR\n10;CAR-1\n")
