@@ -52,7 +52,7 @@ def isolated_qsettings(*_args, **_kwargs):
     return QSettings(str(QGIS_TEST_SETTINGS / "settings.ini"), QSettings.IniFormat)
 
 
-for settings_module in (plugin, batch_window, car_document_window):
+for settings_module in (plugin, batch_window, car_document_window, update_window):
     settings_module.QSettings = isolated_qsettings
 
 
@@ -80,7 +80,7 @@ class QgisRegressionTests(unittest.TestCase):
     def tearDown(self):
         pass  # O pool OGR pode manter arquivos abertos até QgsApplication.exitQgis.
 
-    def test_update_window_retires_abandoned_catalog_without_replacing_it(self):
+    def test_update_window_retires_remote_catalog_and_uses_offline_release(self):
         retired_url = (
             "https://api.github.com/repos/Andre-Marchetti-Cactvs/"
             "Qgis_plugin-microcredito/contents/updates/homologacao/catalog.json?"
@@ -93,17 +93,19 @@ class QgisRegressionTests(unittest.TestCase):
 
         settings = isolated_qsettings()
         settings.setValue("updates/catalog_url", retired_url)
+        settings.setValue("updates/authcfg", "credencial-antiga")
         settings.sync()
 
         with patch.object(update_window, "QSettings", isolated_qsettings):
             window = update_window.UpdateWindow(Iface())
 
         self.assertEqual(update_window.DEFAULT_CATALOG_URL, "")
-        self.assertEqual(window.catalog_url.text(), "")
         self.assertEqual(settings.value("updates/catalog_url", "", type=str), "")
-        self.assertIn(
-            "não contém catálogo de produção assinado", window.test_warning.text()
-        )
+        self.assertEqual(settings.value("updates/authcfg", "", type=str), "")
+        self.assertEqual(window.release_path.text(), "")
+        self.assertFalse(hasattr(window, "catalog_url"))
+        self.assertFalse(hasattr(window, "auth_config"))
+        self.assertIn("Bases Plugin trabalha offline", window.release_help.text())
         window.close()
 
     def test_reused_search_window_ignores_legacy_path_settings(self):
