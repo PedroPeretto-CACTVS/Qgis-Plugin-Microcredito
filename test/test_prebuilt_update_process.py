@@ -127,7 +127,8 @@ def _run_worker(
 
 
 def _events(process: subprocess.CompletedProcess[str]) -> list[dict[str, object]]:
-    return [json.loads(line) for line in process.stdout.splitlines() if line.strip()]
+    events = [json.loads(line) for line in process.stdout.splitlines() if line.strip()]
+    return [event for event in events if event.get("event") != "heartbeat"]
 
 
 def _result(process: subprocess.CompletedProcess[str]) -> object:
