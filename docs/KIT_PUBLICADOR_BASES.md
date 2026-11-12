@@ -48,6 +48,12 @@ catalog.json.sig
 packages/<id-do-pacote>.zip
 ```
 
+O nome também integra o contrato de publicação e deve seguir exatamente
+`bases-plugin-DD-MM-AAAA.carbases`. A data identifica a emissão da atualização e
+deve coincidir com a data de `issued_at` do catálogo assinado. Nome sem data,
+data inexistente, outra extensão ou divergência com o catálogo bloqueiam a
+montagem do arquivo.
+
 O catálogo assinado declara o tamanho e o SHA-256 de cada pacote. Arquivos
 ausentes, adicionais, duplicados ou divergentes bloqueiam a publicação antes de
 qualquer alteração local. Se uma base falhar durante a aplicação, as bases já
@@ -127,7 +133,7 @@ uv run car-microcredito-installer base-release `
   --signature catalog.json.sig `
   --package mte=C:\caminho\mte.zip `
   --package embargos=C:\caminho\embargos.zip `
-  --output bases-plugin-AAAA-MM-DD.carbases
+  --output bases-plugin-DD-MM-AAAA.carbases
 ```
 
 Todos os pacotes declarados no catálogo devem ser informados no último comando.
@@ -142,6 +148,8 @@ Todos os pacotes declarados no catálogo devem ser informados no último comando
 - quantidade diferente de 36 pacotes técnicos ou cobertura diferente das 11
   bases lógicas na release completa;
 - divergência de tamanho ou hash;
+- nome diferente de `bases-plugin-DD-MM-AAAA.carbases`, data inválida ou
+  divergente da emissão do catálogo;
 - teste de consulta, mapa, relatório ou restauração com falha;
 - ausência de aprovação do hash exato do catálogo.
 
