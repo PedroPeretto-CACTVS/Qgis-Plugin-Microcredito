@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import importlib
 import sys
+import time
 from pathlib import Path
-from urllib.parse import urlparse
 
-from qgis.core import QgsApplication, QgsAuthMethodConfig
-from qgis.gui import QgsAuthConfigSelect
-from qgis.PyQt.QtCore import QSettings, Qt, QThread, pyqtSignal
+from qgis.PyQt.QtCore import QEvent, QSettings, Qt, QTimer
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
@@ -33,6 +31,12 @@ from qgis.PyQt.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
 )
+
+from qgis_plugin_microcredito.application.local_data_paths import (
+    default_local_data_paths,
+)
+
+from .update_process import UpdateProcess
 
 
 DEFAULT_CATALOG_URL = ""
@@ -91,107 +95,9 @@ def _load_updates_core():
         module.local_versions,
         module.latest_restore_point,
         module.restore_latest,
+        module.BaseReleaseBundle,
+        module.apply_catalog_release,
     )
-
-
-def _github_token(authcfg: str) -> str | None:
-    """Lê um PAT apenas em memória; QSettings guarda somente o id authcfg."""
-    if not authcfg:
-        return None
-    config = QgsAuthMethodConfig()
-    loaded = QgsApplication.authManager().loadAuthenticationConfig(authcfg, config, True)
-    if isinstance(loaded, tuple):
-        ok, loaded_config = loaded
-        if loaded_config is not None:
-            config = loaded_config
-    else:  # compatibilidade com bindings QGIS que atualizam por referência
-        ok = loaded
-    if not ok:
-        raise ValueError("Não foi possível abrir a credencial selecionada no QGIS.")
-    if config.method() != "Basic":
-        raise ValueError("A credencial do GitHub deve usar o método Basic do QGIS.")
-    token = config.config("password").strip()
-    if not token:
-        raise ValueError("A credencial selecionada não possui token no campo de senha.")
-    return token
-
-
-def _is_github_api_url(url: str) -> bool:
-    return (urlparse(url).hostname or "").lower() == "api.github.com"
-
-
-class _CatalogWorker(QThread):
-    completed = pyqtSignal(object)
-    failed = pyqtSignal(str)
-
-    def __init__(self, catalog_url: str, public_key: str, bearer_token: str | None, parent=None):
-        super().__init__(parent)
-        self.catalog_url = catalog_url
-        self.public_key = public_key
-        self.bearer_token = bearer_token
-
-    def run(self):
-        try:
-            CatalogClient, _, _, _, _, _, _, _, _, _ = _load_updates_core()
-            self.completed.emit(CatalogClient(
-                self.catalog_url, self.public_key, bearer_token=self.bearer_token
-            ).fetch_catalog())
-        except Exception as exc:
-            self.failed.emit(str(exc))
-        finally:
-            self.bearer_token = None
-
-
-class _ApplyWorker(QThread):
-    completed = pyqtSignal(object)
-    failed = pyqtSignal(str)
-    progress_changed = pyqtSignal(int, str)
-
-    def __init__(self, data_root: Path, database: Path, catalog_url: str, public_key: str,
-                 bearer_token: str | None, package, parent=None):
-        super().__init__(parent)
-        self.data_root = data_root
-        self.database = database
-        self.catalog_url = catalog_url
-        self.public_key = public_key
-        self.bearer_token = bearer_token
-        self.package = package
-
-    def run(self):
-        try:
-            CatalogClient, LocalUpdater, _, _, _, _, _, _, _, _ = _load_updates_core()
-            client = CatalogClient(self.catalog_url, self.public_key, bearer_token=self.bearer_token)
-            updater = LocalUpdater(
-                self.data_root, self.database, client,
-                progress=lambda value, message: self.progress_changed.emit(value, message),
-            )
-            self.completed.emit(updater.apply(self.package))
-        except Exception as exc:
-            self.failed.emit(str(exc))
-        finally:
-            self.bearer_token = None
-
-
-class _RestoreWorker(QThread):
-    completed = pyqtSignal(object)
-    failed = pyqtSignal(str)
-    progress_changed = pyqtSignal(int, str)
-
-    def __init__(self, data_root: Path, database: Path, parent=None):
-        super().__init__(parent)
-        self.data_root = data_root
-        self.database = database
-
-    def run(self):
-        try:
-            _, _, _, _, _, _, _, _, _, restore_latest = _load_updates_core()
-            self.completed.emit(restore_latest(
-                self.data_root,
-                self.database,
-                progress=lambda value, message: self.progress_changed.emit(value, message),
-            ))
-        except Exception as exc:
-            self.failed.emit(str(exc))
 
 
 class UpdateWindow(QDialog):
@@ -212,7 +118,9 @@ class UpdateWindow(QDialog):
         super().__init__(iface.mainWindow())
         self.iface = iface
         self.settings = QSettings("Cactvs", "CARMicrocredito")
+        self.local_paths = default_local_data_paths()
         self.catalog = None
+        self.catalog_fingerprint = None
         self.statuses = {}
         self.restore_point = None
         self.worker = None
@@ -243,52 +151,33 @@ class UpdateWindow(QDialog):
             QLabel#status { background: #edf5f1; color: #25483b; border-radius: 5px; padding: 8px; }
         """)
 
-        self.database = QLineEdit(self.settings.value("database", "", type=str))
-        self.database.setPlaceholderText("Selecione o banco local car_microcredito.db")
-        choose_database = QPushButton("Selecionar…")
-        choose_database.clicked.connect(self._select_database)
-        database_row = QHBoxLayout()
-        database_row.addWidget(self.database, 1)
-        database_row.addWidget(choose_database)
-
-        saved_catalog_url = self.settings.value(
-            "updates/catalog_url", DEFAULT_CATALOG_URL, type=str
-        ).strip()
-        if saved_catalog_url in RETIRED_CATALOG_URLS:
-            self.settings.remove("updates/catalog_url")
-            self.settings.sync()
-            saved_catalog_url = DEFAULT_CATALOG_URL
-        self.catalog_url = QLineEdit(saved_catalog_url)
-        self.catalog_url.setPlaceholderText(
-            "Informe a URL HTTPS de um catálogo assinado homologado"
+        self.settings.remove("updates/catalog_url")
+        self.settings.remove("updates/authcfg")
+        self.release_path = QLineEdit(
+            self.settings.value("updates/release_path", "", type=str)
         )
-        self.catalog_url.setToolTip("Somente HTTPS. O endereço não recebe nenhuma informação da consulta.")
-
-        self.auth_config = QgsAuthConfigSelect(self)
-        saved_authcfg = self.settings.value("updates/authcfg", "", type=str)
-        if saved_authcfg:
-            self.auth_config.setConfigId(saved_authcfg)
-        self.auth_config.setToolTip(
-            "Selecione uma configuração Basic do QGIS. Informe um nome genérico como usuário "
-            "e o token GitHub de leitura no campo senha. O plugin salva somente o id da configuração."
+        self.release_path.setPlaceholderText(
+            "Selecione o arquivo .carbases do Bases Plugin"
         )
+        self.choose_release = QPushButton("Selecionar Bases Plugin…")
+        self.choose_release.clicked.connect(self._select_release)
+        release_row = QHBoxLayout()
+        release_row.addWidget(self.release_path, 1)
+        release_row.addWidget(self.choose_release)
 
-        setup = QGroupBox("Fontes locais e catálogo do publicador")
+        setup = QGroupBox("Bases Plugin")
         setup_layout = QFormLayout(setup)
         setup_layout.setRowWrapPolicy(QFormLayout.WrapLongRows)
         setup_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-        setup_layout.addRow("Banco SQLite", database_row)
-        setup_layout.addRow("Catálogo assinado (HTTPS)", self.catalog_url)
-        setup_layout.addRow("Credencial do GitHub privado", self.auth_config)
+        setup_layout.addRow("Arquivo .carbases", release_row)
 
-        self.test_warning = QLabel(
-            "O repositório do publicador não contém catálogo de produção assinado. "
-            "O inventário local e a restauração continuam disponíveis; para homologar "
-            "atualizações, configure manualmente uma URL HTTPS de catálogo assinado. "
-            "Nenhum CPF/CNPJ, CAR, geometria ou resultado de consulta é enviado."
+        self.release_help = QLabel(
+            "O Bases Plugin trabalha offline: valida assinatura, versão, compatibilidade e "
+            "integridade antes de alterar as bases locais. Nenhum CPF/CNPJ, CAR, "
+            "geometria ou resultado de consulta é enviado."
         )
-        self.test_warning.setObjectName("warning")
-        self.test_warning.setWordWrap(True)
+        self.release_help.setObjectName("warning")
+        self.release_help.setWordWrap(True)
 
         self.table = QTableWidget(0, len(self.TABLE_COLUMNS))
         self.table.setHorizontalHeaderLabels(self.TABLE_COLUMNS)
@@ -300,9 +189,8 @@ class UpdateWindow(QDialog):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
         header.setSectionResizeMode(7, QHeaderView.Stretch)
-        self.table.itemSelectionChanged.connect(self._update_apply_button)
 
-        self.status_label = QLabel("Informe o banco local para ver as versões já instaladas.")
+        self.status_label = QLabel("Selecione um Bases Plugin para validar e atualizar as bases.")
         self.status_label.setObjectName("status")
         self.status_label.setWordWrap(True)
 
@@ -311,13 +199,18 @@ class UpdateWindow(QDialog):
         self.progress.setValue(0)
         self.progress.setFormat("Aguardando operação")
         self.progress.setTextVisible(True)
+        self.activity_label = QLabel("A preparação será executada fora do processo do QGIS.")
+        self.activity_label.setWordWrap(True)
+        self.activity_timer = QTimer(self)
+        self.activity_timer.setInterval(1000)
+        self.activity_timer.timeout.connect(self._update_activity)
 
-        self.refresh = QPushButton("Procurar atualizações")
+        self.refresh = QPushButton("Validar Bases Plugin")
         self.refresh.setObjectName("primary")
         self.refresh.clicked.connect(self.refresh_catalog)
-        self.apply = QPushButton("Atualizar selecionada")
+        self.apply = QPushButton("Aplicar Bases Plugin")
         self.apply.setEnabled(False)
-        self.apply.clicked.connect(self.apply_selected)
+        self.apply.clicked.connect(self.apply_release)
         self.restore = QPushButton("Restaurar versão anterior")
         self.restore.setEnabled(False)
         self.restore.clicked.connect(self.restore_previous)
@@ -333,27 +226,80 @@ class UpdateWindow(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.addWidget(setup)
-        layout.addWidget(self.test_warning)
+        layout.addWidget(self.release_help)
         layout.addWidget(self.status_label)
         layout.addWidget(self.table, 1)
         layout.addWidget(self.progress)
+        layout.addWidget(self.activity_label)
         layout.addLayout(actions)
+        self.release_path.textEdited.connect(self._release_changed)
+        if self.iface.mainWindow() is not None:
+            self.iface.mainWindow().installEventFilter(self)
         self._show_local_inventory()
 
-    def _database_path(self) -> Path | None:
-        value = self.database.text().strip()
-        if not value:
-            return None
-        path = Path(value).expanduser()
-        return path.resolve() if path.is_file() else None
+    def _release_changed(self):
+        self.catalog = None
+        self.catalog_fingerprint = None
+        self.statuses = {}
+        self._update_apply_button()
 
-    def _select_database(self):
+    def _start_process(self, command, completed):
+        database = self._database_path()
+        request = {
+            "protocol_version": 1,
+            "command": command,
+            "data_root": str(database.parent),
+            "database": str(database),
+        }
+        if command != "restore":
+            request["release_path"] = str(Path(self.release_path.text().strip()).expanduser().resolve())
+        if command == "apply":
+            request["expected_catalog_fingerprint"] = self.catalog_fingerprint
+        self.worker = UpdateProcess(request)
+        self.worker.completed.connect(completed)
+        self.worker.failed.connect(self._worker_failed)
+        self.worker.progress_changed.connect(self._progress_changed)
+        self.worker.finished.connect(self._worker_finished)
+        self.worker.start()
+        self.activity_timer.start()
+        self._update_activity()
+
+    def _update_activity(self):
+        worker = self.worker
+        if worker is None or worker.started_at is None:
+            return
+        now = time.monotonic()
+        elapsed = int(now - worker.started_at)
+        if worker.last_response is None:
+            state = "Iniciando processo externo"
+        else:
+            silence = int(now - worker.last_response)
+            state = (f"Processo externo {worker.pid} ativo" if silence < 10
+                     else f"Sem resposta do processo externo há {silence}s; conclusão ainda não confirmada")
+        self.activity_label.setText(f"{state} • tempo decorrido {elapsed // 60:02d}:{elapsed % 60:02d}")
+
+    def eventFilter(self, watched, event):
+        if (watched is self.iface.mainWindow() and event.type() == QEvent.Close
+                and self.worker is not None and self.worker.isRunning()):
+            QMessageBox.information(self, "Atualização em andamento",
+                                    "Aguarde a conclusão antes de fechar o QGIS. O processamento está em uma aplicação separada.")
+            event.ignore()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _database_path(self) -> Path:
+        return self.local_paths.database.resolve()
+
+    def _select_release(self):
         selected, _ = QFileDialog.getOpenFileName(
-            self, "Selecionar banco local", self.database.text(), "Banco SQLite (*.db);;Todos os arquivos (*)"
+            self,
+            "Selecionar Bases Plugin",
+            self.release_path.text(),
+            "Bases Plugin (*.carbases);;Todos os arquivos (*)",
         )
         if selected:
-            self.database.setText(selected)
-            self._show_local_inventory()
+            self.release_path.setText(selected)
+            self.refresh_catalog()
 
     def _show_local_inventory(self):
         database = self._database_path()
@@ -361,14 +307,26 @@ class UpdateWindow(QDialog):
         self.statuses = {}
         self.restore_point = None
         self.catalog = None
+        self.catalog_fingerprint = None
         self._update_apply_button()
         self.restore.setEnabled(False)
-        if database is None:
-            self.status_label.setText("Selecione um arquivo car_microcredito.db existente. Nenhuma base foi alterada.")
-            return
         try:
-            _, _, _, _, _, ensure_not_updating, local_inventory, _, latest_restore_point, _ = _load_updates_core()
-            ensure_not_updating(database.parent)
+            (
+                _,
+                _,
+                _,
+                _,
+                _,
+                ensure_not_updating,
+                local_inventory,
+                _,
+                latest_restore_point,
+                _,
+                _,
+                _,
+            ) = _load_updates_core()
+            if database.parent.exists():
+                ensure_not_updating(database.parent)
             inventory = local_inventory(database.parent, database)
             self.restore_point = latest_restore_point(database.parent, database)
         except Exception as exc:
@@ -408,9 +366,8 @@ class UpdateWindow(QDialog):
         else:
             self._update_apply_button()
         self.restore.setEnabled(not busy and self.restore_point is not None)
-        self.database.setEnabled(not busy)
-        self.catalog_url.setEnabled(not busy)
-        self.auth_config.setEnabled(not busy)
+        self.release_path.setEnabled(not busy)
+        self.choose_release.setEnabled(not busy)
         self.status_label.setText(message)
 
     def _update_restore_button(self):
@@ -429,52 +386,64 @@ class UpdateWindow(QDialog):
         self.progress.setFormat("%p%")
         self.status_label.setText(message)
 
-    def _save_settings(self, database: Path, catalog_url: str, authcfg: str):
-        self.settings.setValue("database", str(database))
-        self.settings.setValue("updates/catalog_url", catalog_url)
-        self.settings.setValue("updates/authcfg", authcfg)
+    def _save_settings(self, release_path: Path):
+        self.settings.setValue("updates/release_path", str(release_path))
+        self.settings.sync()
 
     def refresh_catalog(self):
-        database = self._database_path()
-        catalog_url = self.catalog_url.text().strip()
-        if database is None:
-            QMessageBox.information(self, "Banco local", "Selecione um arquivo car_microcredito.db existente.")
+        if self.worker is not None:
             return
-        if not catalog_url:
+        database = self._database_path()
+        release_path = Path(self.release_path.text().strip()).expanduser()
+        if not release_path.is_file():
             QMessageBox.information(
-                self, "Catálogo de homologação",
-                "O repositório do publicador não possui catálogo de produção assinado. "
-                "Informe uma URL HTTPS de catálogo assinado somente para homologação."
+                self,
+                "Bases Plugin",
+                "Selecione um arquivo .carbases do Bases Plugin fornecido pelo líder do projeto.",
             )
             return
         try:
-            _, _, public_key, _, _, ensure_not_updating, _, _, _, _ = _load_updates_core()
-            ensure_not_updating(database.parent)
-            authcfg = self.auth_config.configId()
-            bearer_token = _github_token(authcfg) if _is_github_api_url(catalog_url) else None
-            if _is_github_api_url(catalog_url) and not bearer_token:
-                raise ValueError("Selecione uma credencial Basic com token GitHub de leitura.")
+            (
+                _,
+                _,
+                public_key,
+                _,
+                _,
+                ensure_not_updating,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+            ) = _load_updates_core()
+            if database.parent.exists():
+                ensure_not_updating(database.parent)
         except Exception as exc:
             QMessageBox.warning(self, "Atualização bloqueada", str(exc))
             return
-        self._save_settings(database, catalog_url, authcfg)
+        release_path = release_path.resolve()
+        self._save_settings(release_path)
         self.progress.setRange(0, 0)
-        self.progress.setFormat("Consultando catálogo…")
-        self._set_busy(True, "Baixando catálogo e assinatura. Nenhuma base local será modificada nesta etapa…")
-        self.worker = _CatalogWorker(catalog_url, public_key, bearer_token, self)
-        self.worker.completed.connect(self._catalog_loaded)
-        self.worker.failed.connect(self._worker_failed)
-        self.worker.finished.connect(self._worker_finished)
-        self.worker.start()
+        self.progress.setFormat("Validando pacote…")
+        self._set_busy(
+            True,
+            "Validando assinatura e integridade de todas as bases. Nenhuma base local será modificada nesta etapa…",
+        )
+        self.catalog = None
+        self.catalog_fingerprint = None
+        self.statuses = {}
+        self._start_process("validate", self._catalog_loaded)
 
-    def _catalog_loaded(self, catalog):
-        database = self._database_path()
-        if database is None:
-            self._worker_failed("O banco local deixou de estar disponível.")
-            return
+    def _catalog_loaded(self, result):
         try:
-            _, _, _, _, compare_catalog, _, _, _, _, _ = _load_updates_core()
-            statuses = compare_catalog(catalog, database.parent, database)
+            from qgis_plugin_microcredito.infrastructure.updates import Catalog, CatalogPackage, UpdateStatus
+
+            document = dict(result["catalog"])
+            document["packages"] = tuple(CatalogPackage(**item) for item in document["packages"])
+            catalog = Catalog(**document)
+            statuses = [UpdateStatus(**item) for item in result["statuses"]]
+            self.catalog_fingerprint = result["catalog_fingerprint"]
         except Exception as exc:
             self._worker_failed(str(exc))
             return
@@ -513,33 +482,22 @@ class UpdateWindow(QDialog):
         blocked = sum(status.state == "inaplicavel" for status in statuses)
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        self.progress.setFormat("Catálogo validado")
+        self.progress.setFormat("Pacote validado")
         if available:
             noun = "atualização disponível" if available == 1 else "atualizações disponíveis"
             channel = "produção" if getattr(catalog, "channel", "homologacao") == "producao" else "homologação"
-            message = f"Catálogo assinado de {channel} válido. {available} {noun}."
+            message = f"Bases Plugin de {channel} válido. {available} {noun}."
         elif blocked:
             message = (
-                "Catálogo assinado anterior ao estado local mais recente. "
+                "Bases Plugin anterior ao estado local mais recente. "
                 "Nenhum pacote regressivo pode ser aplicado."
             )
         else:
             message = (
-                "Catálogo assinado e válido. Nenhuma atualização disponível: "
+                "Bases Plugin assinado e válido. Nenhuma atualização disponível: "
                 "as versões publicadas já estão instaladas."
             )
         self._set_busy(False, message)
-
-    def _selected_package(self):
-        row = self.table.currentRow()
-        if row < 0 or self.catalog is None:
-            return None
-        item = self.table.item(row, 0)
-        identifier = item.data(Qt.UserRole) if item else None
-        status = self.statuses.get(identifier)
-        if status is None or status.state != "disponivel":
-            return None
-        return next((package for package in self.catalog.packages if package.identifier == identifier), None)
 
     def _update_apply_button(self):
         if self.worker is not None:
@@ -548,72 +506,58 @@ class UpdateWindow(QDialog):
             self.apply.setToolTip("Aguarde a operação atual terminar.")
             return
 
-        row = self.table.currentRow()
         if self.catalog is None:
             self.apply.setEnabled(False)
-            self.apply.setText("Procurar atualizações primeiro")
-            self.apply.setToolTip("Consulte o catálogo assinado antes de escolher uma atualização.")
+            self.apply.setText("Validar Bases Plugin primeiro")
+            self.apply.setToolTip("Valide o Bases Plugin assinado antes de aplicá-lo.")
             return
-        if row < 0:
-            self.apply.setEnabled(False)
-            self.apply.setText("Selecione uma atualização")
-            self.apply.setToolTip("Selecione na tabela uma linha marcada como Disponível.")
-            return
-
-        item = self.table.item(row, 0)
-        identifier = item.data(Qt.UserRole) if item else None
-        status = self.statuses.get(identifier)
-        if status is not None and status.state == "atual":
-            self.apply.setEnabled(False)
-            self.apply.setText("Base já atualizada")
-            self.apply.setToolTip("A versão publicada desta base já está instalada.")
-            return
-
-        package = self._selected_package()
-        self.apply.setEnabled(package is not None)
-        self.apply.setText("Atualizar selecionada" if package is not None else "Atualização indisponível")
+        available = sum(
+            status.state == "disponivel" for status in self.statuses.values()
+        )
+        self.apply.setEnabled(available > 0)
+        self.apply.setText(
+            f"Aplicar Bases Plugin ({available})"
+            if available
+            else "Bases já atualizadas"
+        )
         self.apply.setToolTip(
-            f"Instalar a versão {package.version}." if package is not None
-            else "A linha selecionada não possui um pacote de atualização válido."
+            "Aplicar todas as bases novas como uma única operação reversível."
+            if available
+            else "Todas as versões desta publicação já estão instaladas."
         )
 
-    def apply_selected(self):
+    def apply_release(self):
+        if self.worker is not None:
+            return
         database = self._database_path()
-        package = self._selected_package()
-        if database is None or package is None:
+        catalog = self.catalog
+        release_path = Path(self.release_path.text().strip()).expanduser()
+        available = sum(
+            status.state == "disponivel" for status in self.statuses.values()
+        )
+        if catalog is None or not release_path.is_file() or not available:
             return
         answer = QMessageBox.question(
-            self, "Confirmar atualização",
-            f"Atualizar ‘{package.label}’ para a versão {package.version}?\n\n"
-            "O pacote será validado, preparado em cópia temporária e a versão anterior será guardada para reversão.",
+            self,
+            "Confirmar Bases Plugin",
+            f"Aplicar {available} atualização(ões) da publicação selecionada?\n\n"
+            "Todas serão validadas. Se uma falhar, as anteriores serão restauradas automaticamente.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
             return
-        catalog_url = self.catalog_url.text().strip()
-        _, _, public_key, _, _, _, _, _, _, _ = _load_updates_core()
-        try:
-            bearer_token = _github_token(self.auth_config.configId()) if _is_github_api_url(catalog_url) else None
-        except Exception as exc:
-            QMessageBox.warning(self, "Credencial indisponível", str(exc))
-            return
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setFormat("%p%")
-        self._set_busy(True, "Validando e aplicando a atualização local. Mantenha esta janela aberta…")
-        self.worker = _ApplyWorker(
-            database.parent, database, catalog_url, public_key, bearer_token, package, self
-        )
-        self.worker.completed.connect(self._package_applied)
-        self.worker.failed.connect(self._worker_failed)
-        self.worker.progress_changed.connect(self._progress_changed)
-        self.worker.finished.connect(self._worker_finished)
-        self.worker.start()
+        self._set_busy(True, "Aplicando em processo separado. Aguarde antes de consultar as bases ou fechar o QGIS…")
+        self._start_process("apply", self._package_applied)
 
     def restore_previous(self):
+        if self.worker is not None:
+            return
         database = self._database_path()
         point = self.restore_point
-        if database is None or point is None:
+        if point is None:
             QMessageBox.information(self, "Restauração", "Não existe versão anterior disponível para restauração.")
             return
         version = point.restore_version or "o estado local anterior"
@@ -632,50 +576,54 @@ class UpdateWindow(QDialog):
         self.progress.setValue(0)
         self.progress.setFormat("%p%")
         self._set_busy(True, "Validando o histórico antes da restauração…")
-        self.worker = _RestoreWorker(database.parent, database, self)
-        self.worker.completed.connect(self._restore_completed)
-        self.worker.failed.connect(self._restore_failed)
-        self.worker.progress_changed.connect(self._progress_changed)
-        self.worker.finished.connect(self._worker_finished)
-        self.worker.start()
+        self._start_process("restore", self._restore_completed)
 
-    def _package_applied(self, status):
+    def _package_applied(self, statuses):
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self.progress.setFormat("100% — atualização concluída")
         self._show_local_inventory()
-        self.status_label.setText(f"{status.label}: {status.detail}")
-        QMessageBox.information(self, "Base atualizada", status.detail)
+        count = len(statuses)
+        message = (
+            f"Pacote aplicado com sucesso: {count} base(s) atualizada(s). "
+            "As versões anteriores ficaram disponíveis para restauração."
+        )
+        self.status_label.setText(message)
+        QMessageBox.information(self, "Bases Plugin aplicado", message)
 
     def _restore_completed(self, status):
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self.progress.setFormat("100% — restauração concluída")
         self._show_local_inventory()
-        self.status_label.setText(f"{status.label}: {status.detail}")
-        QMessageBox.information(self, "Versão restaurada", status.detail)
-
-    def _restore_failed(self, message: str):
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-        self.progress.setFormat("Restauração não aplicada")
-        self._set_busy(False, f"A versão atual foi preservada: {message}")
-        QMessageBox.warning(self, "Restauração não aplicada", message)
+        self.status_label.setText(f"{status['label']}: {status['detail']}")
+        QMessageBox.information(self, "Versão restaurada", status["detail"])
 
     def _worker_failed(self, message: str):
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        self.progress.setFormat("Atualização não aplicada")
-        self._set_busy(False, f"Nenhuma base foi modificada: {message}")
-        QMessageBox.warning(self, "Atualização não aplicada", message)
+        self.progress.setFormat("Atualização não concluída")
+        self._set_busy(False, f"Atualização não concluída: {message}")
+        QMessageBox.warning(self, "Atualização não concluída", message)
 
     def _worker_finished(self):
         worker = self.worker
         self.worker = None
+        self.activity_timer.stop()
+        self.activity_label.setText("Processo externo encerrado. Confira o resultado acima.")
         if worker is not None:
             worker.deleteLater()
+        self.refresh.setEnabled(True)
+        self.release_path.setEnabled(True)
+        self.choose_release.setEnabled(True)
         self._update_apply_button()
         self._update_restore_button()
+
+    def reject(self) -> None:
+        """Mantém a janela ocupada aberta também ao pressionar Esc."""
+        if self.worker is not None and self.worker.isRunning():
+            return
+        super().reject()
 
     def closeEvent(self, event):
         if self.worker is not None and self.worker.isRunning():
