@@ -12,15 +12,18 @@ def connect(path: str | Path, *, readonly: bool = False) -> sqlite3.Connection:
     db_path = Path(path)
     if readonly:
         connection = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA query_only = ON")
-        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version != SCHEMA_VERSION:
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA query_only = ON")
+            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if version != SCHEMA_VERSION:
+                raise ValueError(
+                    f"Banco incompatível: esquema {version}; esperado {SCHEMA_VERSION}. "
+                    "Faça a migração administrativa em uma cópia antes de consultar."
+                )
+        except Exception:
             connection.close()
-            raise ValueError(
-                f"Banco incompatível: esquema {version}; esperado {SCHEMA_VERSION}. "
-                "Faça a migração administrativa em uma cópia antes de consultar."
-            )
+            raise
         return connection
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
