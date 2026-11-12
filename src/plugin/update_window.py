@@ -121,6 +121,7 @@ class UpdateWindow(QDialog):
         self.local_paths = default_local_data_paths()
         self.catalog = None
         self.catalog_fingerprint = None
+        self.release_format = "raw"
         self.statuses = {}
         self.restore_point = None
         self.worker = None
@@ -172,7 +173,7 @@ class UpdateWindow(QDialog):
         setup_layout.addRow("Arquivo .carbases", release_row)
 
         self.release_help = QLabel(
-            "O Bases Plugin trabalha offline: valida assinatura, versão, compatibilidade e "
+            "O Bases Plugin trabalha offline: valida versão, compatibilidade e "
             "integridade antes de alterar as bases locais. Nenhum CPF/CNPJ, CAR, "
             "geometria ou resultado de consulta é enviado."
         )
@@ -240,6 +241,7 @@ class UpdateWindow(QDialog):
     def _release_changed(self):
         self.catalog = None
         self.catalog_fingerprint = None
+        self.release_format = "raw"
         self.statuses = {}
         self._update_apply_button()
 
@@ -428,7 +430,7 @@ class UpdateWindow(QDialog):
         self.progress.setFormat("Validando pacote…")
         self._set_busy(
             True,
-            "Validando assinatura e integridade de todas as bases. Nenhuma base local será modificada nesta etapa…",
+            "Validando a integridade e compatibilidade de todas as bases. Nenhuma base local será modificada nesta etapa…",
         )
         self.catalog = None
         self.catalog_fingerprint = None
@@ -444,6 +446,7 @@ class UpdateWindow(QDialog):
             catalog = Catalog(**document)
             statuses = [UpdateStatus(**item) for item in result["statuses"]]
             self.catalog_fingerprint = result["catalog_fingerprint"]
+            self.release_format = result.get("release_format", "raw")
         except Exception as exc:
             self._worker_failed(str(exc))
             return
@@ -486,7 +489,10 @@ class UpdateWindow(QDialog):
         if available:
             noun = "atualização disponível" if available == 1 else "atualizações disponíveis"
             channel = "produção" if getattr(catalog, "channel", "homologacao") == "producao" else "homologação"
-            message = f"Bases Plugin de {channel} válido. {available} {noun}."
+            if self.release_format == "prebuilt":
+                message = "Integridade verificada. Bases prontas disponíveis para instalação por cópia."
+            else:
+                message = f"Bases Plugin de {channel} válido. {available} {noun}."
         elif blocked:
             message = (
                 "Bases Plugin anterior ao estado local mais recente. "
@@ -494,6 +500,8 @@ class UpdateWindow(QDialog):
             )
         else:
             message = (
+                "Integridade verificada. Este pacote pré-montado já está instalado."
+                if self.release_format == "prebuilt" else
                 "Bases Plugin assinado e válido. Nenhuma atualização disponível: "
                 "as versões publicadas já estão instaladas."
             )
@@ -509,7 +517,7 @@ class UpdateWindow(QDialog):
         if self.catalog is None:
             self.apply.setEnabled(False)
             self.apply.setText("Validar Bases Plugin primeiro")
-            self.apply.setToolTip("Valide o Bases Plugin assinado antes de aplicá-lo.")
+            self.apply.setToolTip("Valide o Bases Plugin antes de aplicá-lo.")
             return
         available = sum(
             status.state == "disponivel" for status in self.statuses.values()
@@ -521,6 +529,8 @@ class UpdateWindow(QDialog):
             else "Bases já atualizadas"
         )
         self.apply.setToolTip(
+            "Copiar e ativar todas as bases prontas após a verificação."
+            if available and self.release_format == "prebuilt" else
             "Aplicar todas as bases novas como uma única operação reversível."
             if available
             else "Todas as versões desta publicação já estão instaladas."
@@ -537,11 +547,19 @@ class UpdateWindow(QDialog):
         )
         if catalog is None or not release_path.is_file() or not available:
             return
+        confirmation = (
+            "Instalar o conjunto completo de bases prontas por cópia?\n\n"
+            "O pacote será conferido novamente e ativado após concluir a cópia. "
+            "Esta instalação substitui o histórico antigo e não cria ponto de restauração manual. "
+            "Aguarde a conclusão antes de consultar ou fechar o QGIS."
+            if self.release_format == "prebuilt" else
+            f"Aplicar {available} atualização(ões) da publicação selecionada?\n\n"
+            "Todas serão validadas. Se uma falhar, as anteriores serão restauradas automaticamente."
+        )
         answer = QMessageBox.question(
             self,
             "Confirmar Bases Plugin",
-            f"Aplicar {available} atualização(ões) da publicação selecionada?\n\n"
-            "Todas serão validadas. Se uma falhar, as anteriores serão restauradas automaticamente.",
+            confirmation,
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
@@ -579,12 +597,15 @@ class UpdateWindow(QDialog):
         self._start_process("restore", self._restore_completed)
 
     def _package_applied(self, statuses):
+        copied = self.release_format == "prebuilt"
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self.progress.setFormat("100% — atualização concluída")
         self._show_local_inventory()
         count = len(statuses)
         message = (
+            "Bases pré-montadas instaladas por cópia com sucesso."
+            if copied else
             f"Pacote aplicado com sucesso: {count} base(s) atualizada(s). "
             "As versões anteriores ficaram disponíveis para restauração."
         )

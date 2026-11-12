@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import zipfile
+from datetime import date
 from pathlib import Path
+from typing import cast
 
 from qgis_plugin_microcredito.infrastructure.updates import (
     MAX_CATALOG_BYTES,
@@ -13,6 +17,33 @@ from qgis_plugin_microcredito.infrastructure.updates import (
     _parse_catalog,
     verify_catalog_signature,
 )
+
+_RELEASE_FILENAME = re.compile(
+    r"bases-plugin-(?P<day>\d{2})-(?P<month>\d{2})-(?P<year>\d{4})\.carbases"
+)
+
+
+def _validate_release_filename(destination: Path, issued_at: str) -> None:
+    match = _RELEASE_FILENAME.fullmatch(destination.name)
+    if match is None:
+        raise ValueError(
+            "Nome de publicação inválido; use bases-plugin-DD-MM-AAAA.carbases."
+        )
+    try:
+        release_date = date(
+            int(match.group("year")),
+            int(match.group("month")),
+            int(match.group("day")),
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "Nome de publicação inválido; use bases-plugin-DD-MM-AAAA.carbases."
+        ) from exc
+    catalog_date = date.fromisoformat(issued_at[:10])
+    if release_date != catalog_date:
+        raise ValueError(
+            "A data no nome da publicação deve coincidir com a emissão do catálogo."
+        )
 
 
 def _file_sha256(path: Path) -> str:
@@ -43,6 +74,9 @@ def build_base_release(
         raise ValueError("Tamanho da assinatura inválido.")
     verify_catalog_signature(catalog_payload, signature, public_key_pem)
     catalog = _parse_catalog(catalog_payload, allow_bundle_urls=True)
+    catalog_document = cast(dict[str, object], json.loads(catalog_payload))
+    declared_issued_at = cast(str, catalog_document["issued_at"])
+    _validate_release_filename(destination, declared_issued_at)
     expected = {package.identifier for package in catalog.packages}
     if set(packages) != expected:
         raise ValueError("Informe exatamente os pacotes declarados pelo catálogo.")
