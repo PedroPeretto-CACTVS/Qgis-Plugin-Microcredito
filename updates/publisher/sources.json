@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "cadence_days": 14,
+  "sources": [
+    {"id": "sicor_operacoes_car", "label": "Operações e vínculos do Sicor", "mode": "assisted", "official_page_url": "https://www.bcb.gov.br/estabilidadefinanceira/tabelas-credito-rural-proagro"},
+    {"id": "sicor_geometrias", "label": "Geometrias das glebas do Sicor", "mode": "assisted", "official_page_url": "https://www.bcb.gov.br/estabilidadefinanceira/tabelas-credito-rural-proagro"},
+    {"id": "mma_mcr", "label": "Lista de atendimento ao Manual de Crédito Rural", "mode": "assisted", "official_page_url": "https://www.gov.br/mma/pt-br/assuntos/controle-ao-desmatamento-queimadas-e-ordenamento-ambiental-territorial/controle-do-desmatamento-1/atendimento-ao-manual-de-credito-rural"},
+    {"id": "mte", "label": "Cadastro de Empregadores do MTE", "mode": "automatic", "official_page_url": "https://www.gov.br/trabalho-e-emprego/pt-br/assuntos/inspecao-do-trabalho/areas-de-atuacao/combate-ao-trabalho-escravo-e-analogo-ao-de-escravo"},
+    {"id": "sicar_imoveis", "label": "Situação cadastral e geometrias do SICAR", "mode": "captcha", "official_page_url": "https://consulta.car.gov.br/"},
+    {"id": "embargos", "label": "Termos de embargo do Ibama", "mode": "assisted", "official_page_url": "https://dadosabertos.ibama.gov.br/dataset/fiscalizacao-termo-de-embargo"},
+    {"id": "terras_indigenas", "label": "Terras indígenas da Funai", "mode": "assisted", "official_page_url": "https://www.gov.br/funai/pt-br/atuacao/terras-indigenas/geoprocessamento-e-mapas"},
+    {"id": "territorios_quilombolas", "label": "Territórios quilombolas do Incra", "mode": "authenticated", "official_page_url": "https://acervofundiario.incra.gov.br/acervo/login.php"},
+    {"id": "unidades_conservacao", "label": "Unidades de conservação do CNUC", "mode": "assisted", "official_page_url": "https://www.gov.br/mma/pt-br/assuntos/biodiversidade-e-biomas/areas-protegidas/plataforma-cnuc-1"},
+    {"id": "florestas_publicas", "label": "Cadastro Nacional de Florestas Públicas", "mode": "assisted", "official_page_url": "https://dados.florestal.gov.br/dataset/cadastro-nacional-de-florestas-publicas-cnfp"},
+    {"id": "desmatamento_pos_2020", "label": "PRODES do TerraBrasilis", "mode": "assisted", "official_page_url": "https://www.terrabrasilis.dpi.inpe.br/downloads/"}
+  ]
+}

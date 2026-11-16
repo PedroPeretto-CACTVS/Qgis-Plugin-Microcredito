@@ -20,11 +20,21 @@ from qgis_plugin_microcredito.infrastructure.base_access import (
     EXTERNAL_UPDATE_PENDING,
     read_base_access,
 )
+from qgis_plugin_microcredito.infrastructure.prebuilt_install import (
+    PrebuiltInstallError,
+    apply_prebuilt_release,
+    compare_prebuilt_release,
+)
+from qgis_plugin_microcredito.infrastructure.prebuilt_release import (
+    PrebuiltReleaseBundle,
+    is_prebuilt_release,
+)
 from qgis_plugin_microcredito.infrastructure.updates import (
     PUBLISHER_PUBLIC_KEY_PEM,
     BaseReleaseBundle,
     Catalog,
     UpdateError,
+    UpdateStatus,
     _try_lock_stream,
     _unlock_stream,
     _UpdateLockBusy,
@@ -163,20 +173,45 @@ def _run_validate(
 ) -> dict[str, JsonValue]:
     data_root, database = _paths(request)
     release_path = Path(_required_text(request, "release_path")).resolve()
-    emitter.emit("progress", value=0, message="Validando o Bases Plugin assinado…")
-    release = BaseReleaseBundle(release_path, public_key_pem)
+    emitter.emit("progress", value=0, message="Validando o Bases Plugin…")
+    release = _open_release(release_path, public_key_pem)
     catalog = release.fetch_catalog()
     if data_root.exists():
         with read_base_access(data_root):
-            statuses = compare_catalog(catalog, data_root, database)
+            statuses = _release_statuses(release, data_root, database)
     else:
-        statuses = compare_catalog(catalog, data_root, database)
+        statuses = _release_statuses(release, data_root, database)
     emitter.emit("progress", value=100, message="Bases Plugin validado.")
     return {
         "catalog": cast(JsonValue, asdict(catalog)),
         "statuses": cast(JsonValue, [asdict(status) for status in statuses]),
-        "catalog_fingerprint": catalog_fingerprint(catalog),
+        "catalog_fingerprint": _release_fingerprint(release),
+        "release_format": "prebuilt"
+        if isinstance(release, PrebuiltReleaseBundle)
+        else "raw",
     }
+
+
+def _open_release(
+    path: Path, public_key_pem: str
+) -> BaseReleaseBundle | PrebuiltReleaseBundle:
+    if is_prebuilt_release(path):
+        return PrebuiltReleaseBundle(path, public_key_pem)
+    return BaseReleaseBundle(path, public_key_pem)
+
+
+def _release_fingerprint(release: BaseReleaseBundle | PrebuiltReleaseBundle) -> str:
+    if isinstance(release, PrebuiltReleaseBundle):
+        return release.fingerprint
+    return catalog_fingerprint(release.fetch_catalog())
+
+
+def _release_statuses(
+    release: BaseReleaseBundle | PrebuiltReleaseBundle, root: Path, database: Path
+) -> list[UpdateStatus]:
+    if isinstance(release, PrebuiltReleaseBundle):
+        return compare_prebuilt_release(release, root, database)
+    return compare_catalog(release.fetch_catalog(), root, database)
 
 
 def _acquire_job_lock(data_root: Path) -> _JobLock:
@@ -253,6 +288,8 @@ def _write_pending_marker(
 def _apply_failure_is_safely_recovered(exc: Exception) -> bool:
     """Return true only when the core proves that no partial state remains."""
 
+    if isinstance(exc, PrebuiltInstallError):
+        return exc.state_preserved
     if isinstance(exc, _UpdateLockBusy):
         return True
     if not isinstance(exc, UpdateError):
@@ -281,10 +318,10 @@ def _run_apply(
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise ProtocolError("Identidade esperada do catálogo inválida.")
 
-    emitter.emit("progress", value=0, message="Revalidando o Bases Plugin assinado…")
-    release = BaseReleaseBundle(release_path, public_key_pem)
+    emitter.emit("progress", value=0, message="Revalidando o Bases Plugin…")
+    release = _open_release(release_path, public_key_pem)
     catalog = release.fetch_catalog()
-    actual = catalog_fingerprint(catalog)
+    actual = _release_fingerprint(release)
     if not hmac.compare_digest(actual, expected):
         raise UpdateError(
             "O Bases Plugin mudou desde a validação. Valide o arquivo novamente."
@@ -295,15 +332,25 @@ def _run_apply(
     try:
         marker = _write_pending_marker(data_root, command="apply", fingerprint=actual)
         try:
-            statuses = apply_catalog_release(
-                catalog,
-                data_root,
-                database,
-                release,
-                progress=lambda value, message: emitter.emit(
-                    "progress", value=value, message=message
-                ),
-            )
+            if isinstance(release, PrebuiltReleaseBundle):
+                statuses = apply_prebuilt_release(
+                    release,
+                    data_root,
+                    database,
+                    progress=lambda value, message: emitter.emit(
+                        "progress", value=value, message=message
+                    ),
+                )
+            else:
+                statuses = apply_catalog_release(
+                    catalog,
+                    data_root,
+                    database,
+                    release,
+                    progress=lambda value, message: emitter.emit(
+                        "progress", value=value, message=message
+                    ),
+                )
         except Exception as exc:
             if _apply_failure_is_safely_recovered(exc):
                 marker.unlink(missing_ok=True)

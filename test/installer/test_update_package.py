@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -35,19 +36,20 @@ def test_build_update_package_records_payload_and_hash(tmp_path: Path) -> None:
         assert archive.testzip() is None
 
 
-def test_build_base_release_contains_only_signed_catalog_packages(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _base_release_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    issued_at: str = "2026-10-15T12:00:00-03:00",
+) -> tuple[Path, Path, Path]:
     package = tmp_path / "mte.zip"
     package.write_bytes(b"pacote-validado")
-    import hashlib
-
     catalog = tmp_path / "catalog.json"
     catalog.write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "issued_at": "2026-10-15T12:00:00-03:00",
+                "issued_at": issued_at,
                 "expires_at": "2027-10-15T12:00:00-03:00",
                 "packages": [
                     {
@@ -71,8 +73,15 @@ def test_build_base_release_contains_only_signed_catalog_packages(
         "installer.base_release.verify_catalog_signature",
         lambda *_args: None,
     )
+    return catalog, signature, package
 
-    destination = tmp_path / "bases-2026-10.carbases"
+
+def test_build_base_release_contains_only_signed_catalog_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog, signature, package = _base_release_inputs(tmp_path, monkeypatch)
+
+    destination = tmp_path / "bases-plugin-15-10-2026.carbases"
     result = build_base_release(
         catalog,
         signature,
@@ -91,47 +100,62 @@ def test_build_base_release_contains_only_signed_catalog_packages(
         }
 
 
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "bases-plugin.carbases",
+        "bases-plugin-30-02-2026.carbases",
+        "bases-plugin-15-10-2026.zip",
+        "bases-plugin-2026-10-15.carbases",
+    ),
+)
+def test_build_base_release_rejects_invalid_release_filename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, filename: str
+) -> None:
+    catalog, signature, package = _base_release_inputs(tmp_path, monkeypatch)
+
+    with pytest.raises(ValueError, match="bases-plugin-DD-MM-AAAA.carbases"):
+        build_base_release(
+            catalog,
+            signature,
+            {"mte": package},
+            tmp_path / filename,
+            TEST_PUBLISHER_PUBLIC_KEY_PEM,
+        )
+
+
+def test_build_base_release_rejects_filename_date_different_from_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog, signature, package = _base_release_inputs(
+        tmp_path,
+        monkeypatch,
+        issued_at="2026-10-15T23:59:59-03:00",
+    )
+
+    with pytest.raises(ValueError, match="coincidir com a emissão"):
+        build_base_release(
+            catalog,
+            signature,
+            {"mte": package},
+            tmp_path / "bases-plugin-16-10-2026.carbases",
+            TEST_PUBLISHER_PUBLIC_KEY_PEM,
+        )
+
+
 def test_build_base_release_rejects_package_not_declared_by_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    catalog = tmp_path / "catalog.json"
-    catalog.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "issued_at": "2026-10-15T12:00:00-03:00",
-                "expires_at": "2027-10-15T12:00:00-03:00",
-                "packages": [
-                    {
-                        "id": "mte",
-                        "label": "Cadastro MTE",
-                        "version": "2026.10.06",
-                        "strategy": "import_mte",
-                        "url": "https://publisher.example/mte.zip",
-                        "sha256": "a" * 64,
-                        "size_bytes": 123,
-                        "validity_until": "2027-04-05",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    signature = tmp_path / "catalog.json.sig"
-    signature.write_bytes(b"assinatura")
+    catalog, signature, _package = _base_release_inputs(tmp_path, monkeypatch)
     unexpected = tmp_path / "inesperado.zip"
     unexpected.write_bytes(b"x")
-    monkeypatch.setattr(
-        "installer.base_release.verify_catalog_signature",
-        lambda *_args: None,
-    )
 
     with pytest.raises(ValueError, match="exatamente os pacotes"):
         build_base_release(
             catalog,
             signature,
             {"inesperado": unexpected},
-            tmp_path / "release.carbases",
+            tmp_path / "bases-plugin-15-10-2026.carbases",
             TEST_PUBLISHER_PUBLIC_KEY_PEM,
         )
 

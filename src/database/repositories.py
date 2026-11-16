@@ -134,7 +134,11 @@ def find_operation_context(
     connection: sqlite3.Connection, ref_bacen: str, nu_ordem: str
 ) -> dict[str, Any]:
     operation = connection.execute(
-        """SELECT o.*, c.municipio_ibge, c.agencia_if, c.ref_bacen_efetivo,
+        """WITH complementos AS (
+                   SELECT * FROM ativo_sicor_complemento_operacao
+                    WHERE ref_bacen = ? AND nu_ordem = ?
+               )
+           SELECT o.*, c.municipio_ibge, c.agencia_if, c.ref_bacen_efetivo,
                   ((SELECT COUNT(DISTINCT g.indice_gleba)
                      FROM ativo_sicor_ponto_gleba g
                     WHERE g.ref_bacen = o.ref_bacen AND g.nu_ordem = o.nu_ordem) +
@@ -143,11 +147,11 @@ def find_operation_context(
                   (SELECT COUNT(*) FROM ativo_sicor_ponto_gleba g
                     WHERE g.ref_bacen = o.ref_bacen AND g.nu_ordem = o.nu_ordem) AS total_pontos
              FROM ativo_sicor_operacao o
-        LEFT JOIN ativo_sicor_complemento_operacao c
+        LEFT JOIN complementos c
                ON c.ref_bacen = o.ref_bacen AND c.nu_ordem = o.nu_ordem
             WHERE o.ref_bacen = ? AND o.nu_ordem = ?
          ORDER BY o.id DESC LIMIT 1""",
-        (ref_bacen, nu_ordem),
+        (ref_bacen, nu_ordem, ref_bacen, nu_ordem),
     ).fetchone()
     return mapping_to_dict(operation) if operation else {}
 

@@ -49,6 +49,22 @@ function Require-HttpsUrl($Value, [string]$Field = "url") {
     return $text
 }
 
+function Require-PackageUrl($Value, [string]$Identifier) {
+    $text = Require-String $Value "url" 1000
+    $uri = $null
+    if (-not [Uri]::TryCreate($text, [UriKind]::Absolute, [ref]$uri)) {
+        throw "url deve usar HTTPS ou apontar para o próprio Bases Plugin."
+    }
+    if ($uri.Scheme -eq "https" -and -not [string]::IsNullOrWhiteSpace($uri.Host)) {
+        return $text
+    }
+    $expected = "carbases://packages/$Identifier.zip"
+    if ($text -cne $expected) {
+        throw "url offline inválida para $Identifier; esperado $expected"
+    }
+    return $text
+}
+
 function Require-Version($Value, [string]$Field) {
     $text = Require-String $Value $Field 30
     if ($text -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
@@ -103,7 +119,7 @@ foreach ($item in @($template.packages)) {
         throw "provides deve ser único e conter o id do pacote: $identifier"
     }
     $size = [int64](Get-Item -LiteralPath $archivePath).Length
-    $url = Require-HttpsUrl $item.url "url"
+    $url = Require-PackageUrl $item.url $identifier
     if ($url -match '^https://api\.github\.com/.*/releases/assets/' -and $size -ge 2147483648) {
         throw "Ativo acima do limite de 2 GiB do GitHub Release: $archivePath"
     }

@@ -156,6 +156,11 @@ uv run car-microcredito-installer install caminho/do/pacote
 
 # Prepara pacotes e catálogo assinado de atualização
 uv run car-microcredito-installer update-package --help
+uv run car-microcredito-installer base-release --help
+uv run car-microcredito-installer prepare-bases --help
+uv run car-microcredito-installer prebuilt-release --help
+uv run python tools/publisher_cycle.py start --help
+uv run python tools/publisher_cycle.py validate --help
 uv run python tools/inventory_production_sources.py --help
 uv run python tools/validate_production_sources.py --help
 uv run python tools/audit_sicar_state_routing.py --help
@@ -169,8 +174,16 @@ pwsh tools/build_signed_catalog.ps1 -PrepareOnly -TemplatePath catalog.template.
 
 ## Dados após a implantação
 
+No Windows, todas as telas usam `%LOCALAPPDATA%\Cactvs\BasesPlugin`,
+independentemente da versão ou da pasta de instalação do plugin. Banco, CAR e
+camadas ambientais pertencem sempre ao mesmo conjunto. Os campos de banco e
+pasta do CAR, inclusive o bloco de configuração, não aparecem nas telas. O usuário
+trabalha com os campos da consulta; escolhe apenas a publicação `.carbases`, a
+planilha de entrada e o destino dos relatórios quando necessário. Configurações
+antigas de caminhos não alteram essa localização.
+
 ```
-dados/
+%LOCALAPPDATA%/Cactvs/BasesPlugin/
 ├── car_microcredito.db
 ├── car/<UF>/<UF>_AREA_IMOVEL.gpkg    # geometria SICAR por estado (27 UFs)
 └── ambientais/
@@ -182,14 +195,28 @@ dados/
     └── desmatamento_pos_2020.gpkg
 ```
 
+Para migrar uma instalação existente, feche o QGIS e execute:
+
+```powershell
+uv run car-microcredito-installer migrate-bases "C:\caminho\do\conjunto\car_microcredito.db"
+```
+
+O comando copia o banco, `car`, `ambientais` e o histórico do mesmo conjunto,
+valida a cópia e ativa a pasta fixa somente ao concluir. A origem é preservada.
+Uma reinstalação do plugin mantém as bases que já estão na pasta fixa.
+
 ## Uso no QGIS
 
 A pré-análise organiza evidências e regras para o técnico; a ferramenta não aprova nem recusa crédito automaticamente.
 
 1. Instale o plugin (ZIP ou instalador).
 2. Ative em **Complementos → Gerenciar e instalar complementos → Instalados**.
-3. Abra **Complementos → CAR Microcrédito**.
-4. Informe CPF/CNPJ, CAR ou operação Sicor e execute a análise.
+3. Na primeira instalação sem bases, abra **Bases de consulta e atualizações**,
+   selecione a publicação `.carbases` fornecida pelo projeto e aplique-a.
+   O conjunto é ativado automaticamente na pasta fixa; no formato pré-montado,
+   a importação já foi realizada pelo publicador.
+4. Abra **Complementos → CAR Microcrédito**, informe CPF/CNPJ, CAR ou operação
+   Sicor e execute a análise.
 5. Revise o relatório gerado e registre a decisão humana.
 
 Os resultados são **evidências para triagem**, não aprovação automática de crédito.
@@ -200,6 +227,7 @@ Os resultados são **evidências para triagem**, não aprovação automática de
 |-----------|----------|
 | [docs/MIGRACAO_GPT_0_9_4.md](docs/MIGRACAO_GPT_0_9_4.md) | Mapa das funcionalidades migradas e publicação segura |
 | [docs/CONTRATO_ATUALIZACAO_BASES_V3.md](docs/CONTRATO_ATUALIZACAO_BASES_V3.md) | Evidência oficial, compatibilidade e cadeia de publicação do catálogo v3 |
+| [docs/KIT_PUBLICADOR_BASES.md](docs/KIT_PUBLICADOR_BASES.md) | Bases Plugin offline (`.carbases`), rotina quinzenal e critérios de bloqueio |
 | [docs/FLUXOGRAMA_APLICACAO_0_9_4.md](docs/FLUXOGRAMA_APLICACAO_0_9_4.md) | Todos os caminhos de consulta, decisão, atualização e restauração |
 | [docs/MODULOS_FISCAIS_0_9_5.md](docs/MODULOS_FISCAIS_0_9_5.md) | Regra territorial, fontes oficiais, persistência e fluxo dos módulos fiscais |
 | [docs/GUIA_VERSAO_0_8.md](docs/GUIA_VERSAO_0_8.md) | Migração de banco, ativação de importações e mudanças da versão |
