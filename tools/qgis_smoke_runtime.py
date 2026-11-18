@@ -36,6 +36,7 @@ SUITES = {
     ),
     "fixed-root": (
         "test/qgis/test_qgis_regressions.py",
+        "test/qgis/test_map_initial_focus.py",
         "test/qgis/test_installed_fixed_bases.py",
         "test/qgis/test_batch_file_validation.py",
         "test/qgis/test_base_access_qgis.py",

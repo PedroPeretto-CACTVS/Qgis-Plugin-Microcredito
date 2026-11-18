@@ -1233,6 +1233,8 @@ class SearchWindow(QDialog):
         group.insertLayer(0, target)
         group.setExpanded(True)
         canvas = self.iface.mapCanvas()
+        # Finish first-layer auto setup before the CAR overrides the project extent.
+        self.iface.layerTreeCanvasBridge().setCanvasLayers()
         extent = focused_extent(target, canvas.mapSettings().destinationCrs(), context)
         canvas.setExtent(extent)
         canvas.refresh()
