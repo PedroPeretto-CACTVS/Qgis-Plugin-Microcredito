@@ -56,7 +56,7 @@ def test_invalid_release_is_checked_in_another_process_without_blocking_qt(
     timer.start()
     timeout.start(15000)
     job.start()
-    loop.exec_()
+    loop.exec()
     timer.stop()
     timeout.stop()
 
@@ -76,7 +76,7 @@ def test_window_keeps_package_selection_locked_until_external_validation_finishe
         update_window,
         "QSettings",
         lambda *_args, **_kwargs: QSettings(
-            str(tmp_path / "settings.ini"), QSettings.IniFormat
+            str(tmp_path / "settings.ini"), QSettings.Format.IniFormat
         ),
     )
 
@@ -102,7 +102,7 @@ def test_window_keeps_package_selection_locked_until_external_validation_finishe
             field_locked = not window.release_path.isEnabled()
             window.worker.finished.connect(loop.quit)
             QTimer.singleShot(15000, loop.quit)
-            loop.exec_()
+            loop.exec()
             assert picker_locked
             assert field_locked
             assert picker.isEnabled()
@@ -112,7 +112,7 @@ def test_window_keeps_package_selection_locked_until_external_validation_finishe
     finally:
         if window.worker is not None:
             window.worker.finished.connect(loop.quit)
-            loop.exec_()
+            loop.exec()
         window.close()
 
 
@@ -146,7 +146,7 @@ def test_signed_release_is_applied_and_restored_by_distinct_external_processes(
         timeout.timeout.connect(loop.quit)
         timeout.start(15000)
         job.start()
-        loop.exec_()
+        loop.exec()
         timeout.stop()
         assert not job.isRunning()
         assert not failures, failures
@@ -188,7 +188,7 @@ def test_interrupted_external_process_never_reports_success(tmp_path: Path) -> N
     job.finished.connect(loop.quit)
     QTimer.singleShot(15000, loop.quit)
     job.start()
-    loop.exec_()
+    loop.exec()
     assert not job.isRunning()
     assert not results
     assert len(failures) == 1 and "sem confirmação válida" in failures[0]
@@ -201,7 +201,7 @@ def test_window_and_qgis_close_wait_for_the_external_job(tmp_path, monkeypatch):
         update_window,
         "QSettings",
         lambda *_args, **_kwargs: QSettings(
-            str(tmp_path / "settings.ini"), QSettings.IniFormat
+            str(tmp_path / "settings.ini"), QSettings.Format.IniFormat
         ),
     )
     main_window = QMainWindow()
@@ -235,7 +235,7 @@ def test_window_and_qgis_close_wait_for_the_external_job(tmp_path, monkeypatch):
             dialog_closed = window.close()
             qgis_closed = main_window.close()
             remained_visible = window.isVisible() and main_window.isVisible()
-            loop.exec_()
+            loop.exec()
             assert not dialog_closed and not qgis_closed
             assert remained_visible
             assert not job.isRunning()
@@ -250,7 +250,7 @@ def test_window_and_qgis_close_wait_for_the_external_job(tmp_path, monkeypatch):
         main_window.close()
         window.deleteLater()
         main_window.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 @pytest.mark.parametrize("dismissal", ["escape", "reject"])
@@ -260,7 +260,7 @@ def test_busy_window_reject_waits_for_external_job(tmp_path, monkeypatch, dismis
         update_window,
         "QSettings",
         lambda *_args, **_kwargs: QSettings(
-            str(tmp_path / "settings.ini"), QSettings.IniFormat
+            str(tmp_path / "settings.ini"), QSettings.Format.IniFormat
         ),
     )
 
@@ -280,7 +280,7 @@ def test_busy_window_reject_waits_for_external_job(tmp_path, monkeypatch, dismis
 
     def dismiss():
         if dismissal == "escape":
-            QTest.keyClick(window, Qt.Key_Escape)
+            QTest.keyClick(window, Qt.Key.Key_Escape)
         else:
             window.reject()
 
@@ -298,7 +298,7 @@ def test_busy_window_reject_waits_for_external_job(tmp_path, monkeypatch, dismis
             dismiss()
             remained_visible = window.isVisible()
             remained_running = job.isRunning()
-            loop.exec_()
+            loop.exec()
             assert not job.isRunning()
             assert remained_running
             assert remained_visible, "A janela ocupada deve ignorar Esc/reject."
@@ -312,4 +312,4 @@ def test_busy_window_reject_waits_for_external_job(tmp_path, monkeypatch, dismis
             window.worker.process.waitForFinished(5000)
         window.close()
         window.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

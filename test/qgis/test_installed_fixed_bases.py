@@ -52,7 +52,7 @@ def test_installed_fixed_bases_are_queried_after_package_moves(
 
     settings_file = tmp_path / "home/.config/Cactvs/CARMicrocredito.conf"
     settings_file.parent.mkdir(parents=True)
-    settings = QSettings(str(settings_file), QSettings.IniFormat)
+    settings = QSettings(str(settings_file), QSettings.Format.IniFormat)
     if prior_settings == "stale":
         settings.setValue("database", str(tmp_path / "removed-kit/old.db"))
         settings.setValue("car_base", str(tmp_path / "removed-kit/car"))

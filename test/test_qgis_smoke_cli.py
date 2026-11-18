@@ -73,3 +73,37 @@ def test_smoke_refuses_unsafe_or_preexisting_output_before_runtime_start(
     else:
         assert not output.exists()
     assert not (tmp_path / "escaped").exists()
+
+
+@pytest.mark.parametrize(
+    "module_name", ("PyQt5.QtCore", "PyQt6.QtCore", "PySide6.QtCore")
+)
+def test_smoke_refuses_preimported_qt_before_creating_profile(
+    tmp_path: Path, module_name: str
+) -> None:
+    run = tmp_path / "should-stay-empty"
+    run.mkdir()
+    script = ROOT / "tools" / "qgis_smoke_runtime.py"
+    program = f"""
+import runpy, sys, types
+from pathlib import Path
+namespace = runpy.run_path({str(script)!r})
+sys.modules[{module_name!r}] = types.ModuleType({module_name!r})
+try:
+    namespace['execute_smoke']('base-release', Path({str(ROOT)!r}), Path({str(run)!r}), None)
+except RuntimeError as error:
+    if str(error) == 'Qt_imported_before_isolation':
+        raise SystemExit(0)
+    raise
+raise SystemExit('preimported Qt was accepted')
+"""
+    result = subprocess.run(
+        [sys.executable, "-s", "-B", "-c", program],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert list(run.iterdir()) == []

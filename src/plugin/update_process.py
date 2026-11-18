@@ -170,7 +170,7 @@ class UpdateProcess(QObject):
         self.last_response = time.monotonic()
 
     def _process_error(self, error):
-        if error == QProcess.FailedToStart:
+        if error == QProcess.ProcessError.FailedToStart:
             self._failure = "Não foi possível iniciar o processo externo. Nenhuma atualização foi iniciada."
             self._finish(False)
 
@@ -178,7 +178,7 @@ class UpdateProcess(QObject):
         self._read_output()
         self._drain_errors()
         complete = (
-            status == QProcess.NormalExit
+            status == QProcess.ExitStatus.NormalExit
             and code == 0
             and self._has_result
             and self._failure is None
@@ -186,7 +186,7 @@ class UpdateProcess(QObject):
             and not self._buffer.strip()
         )
         if not complete and (
-            status != QProcess.NormalExit or self._protocol_error or not self._failure
+            status != QProcess.ExitStatus.NormalExit or self._protocol_error or not self._failure
         ):
             self._failure = (
                 "O processo externo terminou sem confirmação válida. "
