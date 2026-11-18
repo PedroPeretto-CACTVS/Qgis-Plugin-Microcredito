@@ -128,7 +128,7 @@ class UpdateWindow(QDialog):
 
         self.setWindowTitle("CAR Microcrédito | Bases de consulta")
         self.setWindowIcon(QIcon(str(Path(__file__).parent / "icon.svg")))
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
         self.setMinimumSize(780, 430)
         self.resize(980, 570)
         self.setStyleSheet("""
@@ -168,8 +168,8 @@ class UpdateWindow(QDialog):
 
         setup = QGroupBox("Bases Plugin")
         setup_layout = QFormLayout(setup)
-        setup_layout.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        setup_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        setup_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        setup_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         setup_layout.addRow("Arquivo .carbases", release_row)
 
         self.release_help = QLabel(
@@ -183,13 +183,13 @@ class UpdateWindow(QDialog):
         self.table = QTableWidget(0, len(self.TABLE_COLUMNS))
         self.table.setHorizontalHeaderLabels(self.TABLE_COLUMNS)
         self.table.setAlternatingRowColors(True)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(7, QHeaderView.Stretch)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
 
         self.status_label = QLabel("Selecione um Bases Plugin para validar e atualizar as bases.")
         self.status_label.setObjectName("status")
@@ -281,7 +281,7 @@ class UpdateWindow(QDialog):
         self.activity_label.setText(f"{state} • tempo decorrido {elapsed // 60:02d}:{elapsed % 60:02d}")
 
     def eventFilter(self, watched, event):
-        if (watched is self.iface.mainWindow() and event.type() == QEvent.Close
+        if (watched is self.iface.mainWindow() and event.type() == QEvent.Type.Close
                 and self.worker is not None and self.worker.isRunning()):
             QMessageBox.information(self, "Atualização em andamento",
                                     "Aguarde a conclusão antes de fechar o QGIS. O processamento está em uma aplicação separada.")
@@ -350,7 +350,7 @@ class UpdateWindow(QDialog):
             for column, value in enumerate(values):
                 cell = QTableWidgetItem(str(value))
                 if column == 0:
-                    cell.setData(Qt.UserRole, item.identifier)
+                    cell.setData(Qt.ItemDataRole.UserRole, item.identifier)
                 self.table.setItem(row, column, cell)
         self.status_label.setText(
             f"Inventário de requisitos concluído: {len(inventory)} fonte(s) avaliadas. "
@@ -477,7 +477,7 @@ class UpdateWindow(QDialog):
             for column, value in enumerate(values):
                 cell = QTableWidgetItem(str(value))
                 if column == 0:
-                    cell.setData(Qt.UserRole, status.identifier)
+                    cell.setData(Qt.ItemDataRole.UserRole, status.identifier)
                 self.table.setItem(row, column, cell)
         if statuses:
             self.table.selectRow(first_available_row if first_available_row is not None else 0)
@@ -560,9 +560,9 @@ class UpdateWindow(QDialog):
             self,
             "Confirmar Bases Plugin",
             confirmation,
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
         )
-        if answer != QMessageBox.Yes:
+        if answer != QMessageBox.StandardButton.Yes:
             return
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
@@ -585,10 +585,10 @@ class UpdateWindow(QDialog):
             f"Restaurar ‘{point.label}’ para {version}?\n\n"
             "A versão atual será preservada como um novo ponto de restauração. "
             "Nenhum dado de consulta será enviado ao publicador.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if answer != QMessageBox.Yes:
+        if answer != QMessageBox.StandardButton.Yes:
             return
         self.progress.setRange(0, 100)
         self.progress.setValue(0)

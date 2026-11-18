@@ -48,7 +48,7 @@ def test_actual_button_click_keeps_original_qt_slot_contract(tmp_path, kind, lab
     connection = connect(root / "car_microcredito.db")
     initialize(connection)
     connection.close()
-    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
+    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
     errors = []
     with (
         patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
@@ -112,7 +112,7 @@ def test_consultation_is_blocked_when_external_update_needs_verification(
     )
     marker.parent.mkdir(parents=True)
     marker.write_text('{"job_id": "interrompido"}', encoding="utf-8")
-    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
+    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
     with (
         patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
         patch.object(plugin, "QSettings", lambda *_args: settings),
@@ -160,7 +160,7 @@ def test_real_consultation_excludes_updates_even_during_qt_events(
         else:
             observed.append("unsafe")
 
-    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
+    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
     with (
         patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
         patch.object(plugin, "QSettings", lambda *_args: settings),
@@ -198,7 +198,7 @@ def test_report_keeps_lease_after_database_query_until_user_cancels(
             observed.append("unsafe")
         return ""
 
-    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
+    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
     with (
         patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
         patch.object(plugin, "QSettings", lambda *_args: settings),
