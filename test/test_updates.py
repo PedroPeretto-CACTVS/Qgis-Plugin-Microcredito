@@ -10,6 +10,7 @@ import sqlite3
 import unittest
 import urllib.request
 import zipfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -1216,7 +1217,7 @@ class UpdateTests(unittest.TestCase):
         document = {
             "schema_version": 3,
             "issued_at": "2026-10-14T12:00:00-03:00",
-            "expires_at": "2026-11-14T12:00:00-03:00",
+            "expires_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
             "publication": {
                 "channel": "homologacao",
                 "prepared_by": "Equipe de Dados",
@@ -1273,7 +1274,7 @@ class UpdateTests(unittest.TestCase):
         document = {
             "schema_version": 3,
             "issued_at": "2026-10-14T12:00:00-03:00",
-            "expires_at": "2026-11-14T12:00:00-03:00",
+            "expires_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
             "publication": {
                 "channel": "homologacao",
                 "prepared_by": "Equipe de Dados",
