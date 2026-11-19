@@ -17,6 +17,7 @@ from qgis.core import (
     QgsProject,
     QgsRasterLayer,
     QgsVectorLayer,
+    QgsVariantUtils,
 )
 
 CAR_FIELDS = ("cod_imovel", "codigo_imovel", "num_car", "numero_car", "car", "cod_car")
@@ -216,17 +217,12 @@ def find_car_feature(directory: str | Path, car: str):
     return None
 
 
-def car_feature_context(directory: str | Path, car: str) -> dict[str, object]:
-    """Return the SICAR attributes required by non-spatial business rules."""
-    found = find_car_feature(directory, car)
-    if not found:
-        return {}
-    layer, feature, _, _ = found
-    fields = {field.name().lower(): field.name() for field in layer.fields()}
+def _car_properties_context(properties: dict[str, object], car: str) -> dict[str, object]:
+    fields = {name.lower(): name for name in properties}
 
     def value(*candidates: str) -> object:
         field = next((fields[name] for name in candidates if name in fields), None)
-        return feature[field] if field else None
+        return properties[field] if field else None
 
     car_value = value(*CAR_FIELDS) or car
     return {
@@ -238,6 +234,27 @@ def car_feature_context(directory: str | Path, car: str) -> dict[str, object]:
     }
 
 
+def car_feature_context(directory: str | Path, car: str) -> dict[str, object]:
+    """Return the SICAR attributes required by non-spatial business rules."""
+    found = find_car_feature(directory, car)
+    if not found:
+        return {}
+    layer, feature, _, _ = found
+    return _car_properties_context(
+        {name: feature[name] for name in layer.fields().names()}, car
+    )
+
+
+def exported_car_context(path: str | Path, car: str) -> dict[str, object]:
+    """Read the same SICAR attributes from the geometry just exported."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        properties = payload["features"][0]["properties"]
+        return _car_properties_context(properties, car)
+    except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+        return {}
+
+
 def export_car_feature(
     directory: str | Path, car: str, output: str | Path
 ) -> Path | None:
@@ -246,6 +263,9 @@ def export_car_feature(
         return None
     layer, feature, source_path, field = found
     properties = {name: feature[name] for name in layer.fields().names()}
+    for name, value in properties.items():
+        if QgsVariantUtils.isNull(value):
+            properties[name] = None
     properties.update({"fonte_arquivo": str(source_path), "campo_car": field})
     collection = {
         "type": "FeatureCollection",

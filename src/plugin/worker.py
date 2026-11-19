@@ -6,7 +6,7 @@ from collections import OrderedDict
 from queue import Queue
 from threading import Event
 
-from qgis.core import QgsCoordinateTransformContext, QgsProject
+from qgis.core import QgsCoordinateTransformContext, QgsEllipsoidUtils, QgsProject
 from qgis.PyQt.QtCore import QEventLoop, QThread, pyqtSignal
 
 from qgis_plugin_microcredito.application.hashing import file_sha256
@@ -26,6 +26,8 @@ class EnvironmentalWorker(QThread):
         self.jobs = Queue()
         self.busy = False
         self.cancel_event = Event()
+        # Initialize the shared ellipsoid cache before its first background use.
+        QgsEllipsoidUtils.ellipsoidParameters("GRS80")
         self.start()
 
     def run(self):
