@@ -73,7 +73,7 @@ class BatchWindow(QDialog):
         self.cancel_requested = False
         self.setWindowTitle("CAR Microcrédito | Usuário Supremo - consulta em lista")
         self.setWindowIcon(QIcon(str(Path(__file__).parent / "icon.svg")))
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
         self.setMinimumSize(680, 480)
         self.resize(1050, 680)
         self.setStyleSheet("""
@@ -116,8 +116,8 @@ class BatchWindow(QDialog):
 
         paths = QGroupBox("1. Arquivos")
         form = QFormLayout(paths)
-        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.addRow("Planilha de consultas", self._row(self.xlsx_path, choose_xlsx))
         form.addRow("Pasta dos relatórios", self._row(self.output_path, choose_output))
 
@@ -152,13 +152,13 @@ class BatchWindow(QDialog):
                 "Pré-análise ou mensagem",
             )
         )
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
         for index in range(6):
-            header.setSectionResizeMode(index, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(6, QHeaderView.Stretch)
+            header.setSectionResizeMode(index, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)

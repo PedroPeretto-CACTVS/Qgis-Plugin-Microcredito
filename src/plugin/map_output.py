@@ -125,7 +125,7 @@ def render_analysis_map(
     job.finished.connect(loop.quit)
     job.start()
     if job.isActive():
-        loop.exec_()
+        loop.exec()
     image = job.renderedImage()
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)

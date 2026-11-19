@@ -240,7 +240,7 @@ class SearchWindow(QDialog):
         self.local_paths = default_local_data_paths()
         self.setWindowTitle("CAR Microcrédito | Apoio à decisão socioambiental")
         self.setWindowIcon(QIcon(str(Path(__file__).parent / "icon.svg")))
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
         self.setMinimumSize(600, 560)
         self.setStyleSheet("""
             QDialog { background: #f4f7f5; }
@@ -338,7 +338,7 @@ class SearchWindow(QDialog):
         point_row.setContentsMargins(0, 0, 0, 0)
         point_row.setSpacing(5)
         point_row.addLayout(coordinate_row)
-        point_row.addWidget(search_point, 0, Qt.AlignRight)
+        point_row.addWidget(search_point, 0, Qt.AlignmentFlag.AlignRight)
 
         self.maps_url = QLineEdit()
         self.maps_url.setPlaceholderText(
@@ -354,7 +354,7 @@ class SearchWindow(QDialog):
         self.mma_result.setObjectName("status")
         self.mma_result.setProperty("statusLevel", "neutral")
         self.mma_result.setWordWrap(True)
-        self.mma_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.mma_result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
         self.notice = QLabel(
             "O resultado mostra vínculos encontrados nas bases importadas. "
@@ -365,8 +365,8 @@ class SearchWindow(QDialog):
 
         self.table = QTableWidget(0, len(self.COLUMNS))
         self.table.setHorizontalHeaderLabels([label for _, label in self.COLUMNS])
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
         self.table.setMinimumHeight(112)
@@ -376,8 +376,8 @@ class SearchWindow(QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.itemSelectionChanged.connect(self.use_selected_car)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(len(self.COLUMNS) - 1, QHeaderView.Stretch)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(len(self.COLUMNS) - 1, QHeaderView.ResizeMode.Stretch)
 
         load_plots = QPushButton("Carregar no mapa")
         load_plots.setToolTip(
@@ -455,8 +455,8 @@ class SearchWindow(QDialog):
 
         query_group = QGroupBox("1. Identificar operação")
         query_layout = QFormLayout(query_group)
-        query_layout.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        query_layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        query_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        query_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         query_layout.addRow("CPF ou CNPJ", search_row)
         query_layout.addRow("Número do CAR", car_row)
         query_layout.addRow("CPF/CNPJ vinculado", car_document_row)
@@ -475,7 +475,7 @@ class SearchWindow(QDialog):
         results_layout.addWidget(self.table, 1)
 
         separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShape(QFrame.Shape.HLine)
         separator.setStyleSheet("color: #ccd8d3")
         top_content = QWidget()
         top_layout = QVBoxLayout(top_content)
@@ -484,14 +484,14 @@ class SearchWindow(QDialog):
         top_layout.addWidget(query_group)
         top_scroll = QScrollArea()
         top_scroll.setWidgetResizable(True)
-        top_scroll.setFrameShape(QFrame.NoFrame)
-        top_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        top_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        top_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        top_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        top_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         top_scroll.setWidget(top_content)
         top_scroll.setMinimumHeight(175)
         self.top_scroll = top_scroll
 
-        self.content_splitter = QSplitter(Qt.Vertical)
+        self.content_splitter = QSplitter(Qt.Orientation.Vertical)
         self.content_splitter.setObjectName("contentSplitter")
         self.content_splitter.setChildrenCollapsible(False)
         self.content_splitter.setHandleWidth(8)
@@ -594,7 +594,7 @@ class SearchWindow(QDialog):
         self.processing_bar.show()
         for control in self.interactive_controls:
             control.setEnabled(False)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         QApplication.processEvents()
 
     def _set_processing_outcome(self, message: str, focus=None):
@@ -734,9 +734,9 @@ class SearchWindow(QDialog):
         table = QTableWidget(len(choices), len(columns))
         table.setObjectName("carSelectionTable")
         table.setHorizontalHeaderLabels(columns)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
-        table.setSelectionMode(QTableWidget.SingleSelection)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setAlternatingRowColors(True)
         table.verticalHeader().setVisible(False)
         for row, choice in enumerate(choices):
@@ -749,11 +749,11 @@ class SearchWindow(QDialog):
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
-                item.setData(Qt.UserRole, row)
+                item.setData(Qt.ItemDataRole.UserRole, row)
                 table.setItem(row, column, item)
         header = table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         if choices:
             table.selectRow(0)
         layout.addWidget(table, 1)
@@ -778,16 +778,16 @@ class SearchWindow(QDialog):
         if len(choices) == 1:
             return choices[0]
         dialog = self._car_selection_dialog(choices, origin)
-        QApplication.setOverrideCursor(Qt.ArrowCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.ArrowCursor)
         try:
-            if dialog.exec() != QDialog.Accepted:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
                 return None
         finally:
             QApplication.restoreOverrideCursor()
         table = dialog.findChild(QTableWidget, "carSelectionTable")
         row = table.currentRow() if table else -1
         item = table.item(row, 0) if table and row >= 0 else None
-        choice_index = item.data(Qt.UserRole) if item else None
+        choice_index = item.data(Qt.ItemDataRole.UserRole) if item else None
         if choice_index is None or not 0 <= int(choice_index) < len(choices):
             return None
         return choices[int(choice_index)]
@@ -800,7 +800,7 @@ class SearchWindow(QDialog):
         wanted = int(source_indices[0])
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)
-            if item is not None and item.data(Qt.UserRole) == wanted:
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == wanted:
                 self.table.setCurrentCell(row, 0)
                 self.table.selectRow(row)
                 break
@@ -1005,7 +1005,7 @@ class SearchWindow(QDialog):
                         "car_nao_informado_pelo_sicor": "CAR não informado",
                     }.get(str(value), value)
                 item = QTableWidgetItem(str(value))
-                item.setData(Qt.UserRole, row_index)
+                item.setData(Qt.ItemDataRole.UserRole, row_index)
                 self.table.setItem(row_index, column_index, item)
         self.table.setSortingEnabled(True)
         self.table.resizeColumnsToContents()
@@ -1015,7 +1015,7 @@ class SearchWindow(QDialog):
         if row < 0:
             return None
         item = self.table.item(row, 0)
-        source_index = item.data(Qt.UserRole) if item else None
+        source_index = item.data(Qt.ItemDataRole.UserRole) if item else None
         if source_index is None or not 0 <= int(source_index) < len(self.results):
             return None
         return self.results[int(source_index)]
@@ -1269,7 +1269,7 @@ class SearchWindow(QDialog):
         )
         summary.setObjectName("preAnalysisSummary")
         summary.setWordWrap(True)
-        summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(summary)
 
         explanation = QLabel(
@@ -1290,8 +1290,8 @@ class SearchWindow(QDialog):
         table = QTableWidget(len(rules), len(columns))
         table.setObjectName("preAnalysisTable")
         table.setHorizontalHeaderLabels(columns)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.verticalHeader().setVisible(False)
         backgrounds = {
             "possivel_impedimento": QColor("#FDECEC"),
@@ -1322,10 +1322,10 @@ class SearchWindow(QDialog):
                 )
                 table.setItem(row, column, cell)
         header = table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         table.resizeRowsToContents()
         layout.addWidget(table, 1)
 
@@ -1431,8 +1431,8 @@ class SearchWindow(QDialog):
         table.setObjectName("interferencePreviewTable")
         table.setHorizontalHeaderLabels(columns)
         table.setAlternatingRowColors(False)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.verticalHeader().setVisible(False)
 
         backgrounds = {
@@ -1461,12 +1461,12 @@ class SearchWindow(QDialog):
                 cell.setBackground(background)
                 cell.setToolTip(str(value or ""))
                 if column in (2, 3):
-                    cell.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 table.setItem(row, column, cell)
 
         header = table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(len(columns) - 1, QHeaderView.Stretch)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(len(columns) - 1, QHeaderView.ResizeMode.Stretch)
         table.resizeRowsToContents()
         layout.addWidget(table, 1)
 

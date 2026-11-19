@@ -1,3 +1,4 @@
+import configparser
 import hashlib
 import json
 import shutil
@@ -54,6 +55,27 @@ class DistributionTests(unittest.TestCase):
                     self.assertIn(required, manifest)
                 self.assertEqual("supreme_mode.txt" in manifest, supreme)
                 self.assertIn(b"version=0.9.5", archive.read(package + "/metadata.txt"))
+
+    def test_both_variants_declare_compatibility_with_tested_qgis_versions(self):
+        for supreme, package in (
+            (False, "car_microcredito_qgis"),
+            (True, "car_microcredito_supremo_qgis"),
+        ):
+            result = build(supreme, self.root / (package + ".zip"))
+            with zipfile.ZipFile(result) as archive:
+                metadata = configparser.ConfigParser()
+                metadata.read_string(
+                    archive.read(package + "/metadata.txt").decode("utf-8")
+                )
+            general = metadata["general"]
+            minimum = tuple(map(int, general["qgisMinimumVersion"].split(".")))
+            maximum = tuple(map(int, general["qgisMaximumVersion"].split(".")))
+            minimum += (0,) * (3 - len(minimum))
+            maximum += (0,) * (3 - len(maximum))
+            for supported in ((3, 40, 0), (4, 2, 3)):
+                with self.subTest(package=package, supported=supported):
+                    self.assertLessEqual(minimum, supported)
+                    self.assertGreaterEqual(maximum, supported)
 
     def test_twenty_seven_duplicate_states_do_not_pass(self):
         for index in range(27):
