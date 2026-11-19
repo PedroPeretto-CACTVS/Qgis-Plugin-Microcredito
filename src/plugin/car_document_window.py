@@ -75,7 +75,7 @@ class CarDocumentWindow(QDialog):
 
         self.setWindowTitle("CAR Microcrédito | Consultar CPF/CNPJ por CAR")
         self.setWindowIcon(QIcon(str(Path(__file__).parent / "icon.svg")))
-        self.setWindowFlags(self.windowFlags() | Qt.Window)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Window)
         self.setMinimumSize(820, 470)
         self.resize(1120, 620)
         self.setStyleSheet("""
@@ -123,18 +123,18 @@ class CarDocumentWindow(QDialog):
         )
         self.status.setObjectName("status")
         self.status.setWordWrap(True)
-        self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
         self.table = QTableWidget(0, len(self.COLUMNS))
         self.table.setHorizontalHeaderLabels([label for _, label in self.COLUMNS])
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
 
         close = QPushButton("Fechar")
         close.clicked.connect(self.close)
@@ -181,7 +181,7 @@ class CarDocumentWindow(QDialog):
                 self, "CAR obrigatório", "Informe o número completo do CAR."
             )
             return
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         self.status.setText("Consultando o banco local…")
         QApplication.processEvents()
         try:
@@ -235,7 +235,7 @@ class CarDocumentWindow(QDialog):
             }
             for column_index, (field, _) in enumerate(self.COLUMNS):
                 item = QTableWidgetItem(str(values.get(field) or ""))
-                item.setData(Qt.UserRole, row_index)
+                item.setData(Qt.ItemDataRole.UserRole, row_index)
                 self.table.setItem(row_index, column_index, item)
         self.table.setSortingEnabled(True)
         if self.results:

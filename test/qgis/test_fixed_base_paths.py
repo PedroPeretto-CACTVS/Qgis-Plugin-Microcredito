@@ -25,7 +25,7 @@ class Iface:
 
 def _settings_factory(path: Path):
     def settings(*_args, **_kwargs):
-        return QSettings(str(path), QSettings.IniFormat)
+        return QSettings(str(path), QSettings.Format.IniFormat)
 
     return settings
 

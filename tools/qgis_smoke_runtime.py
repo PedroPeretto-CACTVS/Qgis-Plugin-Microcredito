@@ -197,7 +197,7 @@ def execute_smoke(scope: str, source: Path, run: Path, qa_support: Path | None) 
     )
     require(
         not any(
-            name == "qgis" or name.startswith(("qgis.", "PyQt5.", "PySide"))
+            name == "qgis" or name.startswith(("qgis.", "PyQt5.", "PyQt6.", "PySide"))
             for name in sys.modules
         ),
         "Qt_imported_before_isolation",
@@ -252,7 +252,7 @@ def execute_smoke(scope: str, source: Path, run: Path, qa_support: Path | None) 
 
     import pytest
     from qgis.core import Qgis, QgsApplication, QgsProject, QgsSettings
-    from qgis.PyQt.QtCore import QDir, QSettings
+    from qgis.PyQt.QtCore import QT_VERSION_STR, QDir, QSettings
     from qgis.PyQt.QtGui import QFont, QFontDatabase
 
     require(
@@ -261,12 +261,14 @@ def execute_smoke(scope: str, source: Path, run: Path, qa_support: Path | None) 
         .is_relative_to(qgis_root),
         "qgis_import_outside_native_root",
     )
-    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
     QSettings.setPath(
-        QSettings.IniFormat, QSettings.UserScope, str(locations["qt-user"])
+        QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(locations["qt-user"])
     )
     QSettings.setPath(
-        QSettings.IniFormat, QSettings.SystemScope, str(locations["qt-system"])
+        QSettings.Format.IniFormat,
+        QSettings.Scope.SystemScope,
+        str(locations["qt-system"]),
     )
     app = None
     try:
@@ -304,7 +306,12 @@ def execute_smoke(scope: str, source: Path, run: Path, qa_support: Path | None) 
         require(
             Path(QDir.tempPath()).resolve() == locations["temporary"], "Qt_temp_escaped"
         )
-        if not QFontDatabase().families():
+        families = (
+            QFontDatabase.families()
+            if QT_VERSION_STR.startswith("6.")
+            else QFontDatabase().families()
+        )
+        if not families:
             font = Path(os.environ["WINDIR"]) / "Fonts" / "arial.ttf"
             font_id = QFontDatabase.addApplicationFont(str(font))
             require(font_id >= 0, "offscreen_font_unavailable")
@@ -497,6 +504,12 @@ def main(scope: str) -> int:
                 str(Path(sys.argv[0]).resolve()),
                 *sys.argv[1:],
             ],
+            # OSGeo4W can override sys.executable even in the canonical child.
+            env={
+                key: value
+                for key, value in os.environ.items()
+                if key != "PYTHONEXECUTABLE"
+            },
             check=False,
         ).returncode
     try:

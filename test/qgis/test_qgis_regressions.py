@@ -49,7 +49,9 @@ from qgis_plugin_microcredito.application.local_data_paths import (
 
 
 def isolated_qsettings(*_args, **_kwargs):
-    return QSettings(str(QGIS_TEST_SETTINGS / "settings.ini"), QSettings.IniFormat)
+    return QSettings(
+        str(QGIS_TEST_SETTINGS / "settings.ini"), QSettings.Format.IniFormat
+    )
 
 
 for settings_module in (plugin, batch_window, car_document_window, update_window):
@@ -80,6 +82,55 @@ class QgisRegressionTests(unittest.TestCase):
     def tearDown(self):
         pass  # O pool OGR pode manter arquivos abertos até QgsApplication.exitQgis.
 
+    def test_plugin_public_actions_and_windows_register_then_unload(self):
+        from plugin import classFactory
+
+        class MenuIface(Iface):
+            def __init__(self):
+                self.menu = []
+                self.toolbar = []
+
+            def addPluginToMenu(self, menu, action):
+                self.menu.append((menu, action))
+
+            def addToolBarIcon(self, action):
+                self.toolbar.append(action)
+
+            def removePluginMenu(self, menu, action):
+                self.menu.remove((menu, action))
+
+            def removeToolBarIcon(self, action):
+                self.toolbar.remove(action)
+
+        iface = MenuIface()
+        application = classFactory(iface)
+        application.initGui()
+        try:
+            self.assertEqual(
+                [action.text() for action in iface.toolbar], ["CAR Microcrédito"]
+            )
+            self.assertEqual(
+                [action.text() for _, action in iface.menu],
+                ["CAR Microcrédito", "Bases de consulta e atualizações"],
+            )
+            application.show_window()
+            application.show_update_window()
+            application.show_batch_window()
+            self.assertTrue(application.window.isVisible())
+            self.assertTrue(application.update_window.isVisible())
+            self.assertTrue(application.batch_window.isVisible())
+        finally:
+            for window in (
+                application.window,
+                application.update_window,
+                application.batch_window,
+            ):
+                if window is not None:
+                    window.close()
+            application.unload()
+        self.assertEqual(iface.menu, [])
+        self.assertEqual(iface.toolbar, [])
+
     def test_update_window_retires_remote_catalog_and_uses_offline_release(self):
         retired_url = (
             "https://api.github.com/repos/Andre-Marchetti-Cactvs/"
@@ -89,7 +140,7 @@ class QgisRegressionTests(unittest.TestCase):
         settings_file = self.root / "settings.ini"
 
         def isolated_qsettings(*_args, **_kwargs):
-            return QSettings(str(settings_file), QSettings.IniFormat)
+            return QSettings(str(settings_file), QSettings.Format.IniFormat)
 
         settings = isolated_qsettings()
         settings.setValue("updates/catalog_url", retired_url)
@@ -261,6 +312,22 @@ class QgisRegressionTests(unittest.TestCase):
             canvas.extent().center().x(), extent.center().x(), delta=1
         )
         canvas.deleteLater()
+
+    def test_map_renderer_writes_readable_png_without_network(self):
+        from qgis.PyQt.QtGui import QImage
+
+        from plugin.map_output import render_analysis_map
+
+        target = self.geojson(self.root / "map-target.geojson")
+        destination = self.root / "map.png"
+
+        rendered = render_analysis_map(target, [], destination, include_satellite=False)
+
+        self.assertEqual(rendered, destination)
+        image = QImage(str(destination))
+        self.assertFalse(image.isNull())
+        self.assertGreater(image.width(), 0)
+        self.assertGreater(image.height(), 0)
 
     def test_worker_returns_same_result_and_closes(self):
         target = self.geojson(self.root / "target.geojson")

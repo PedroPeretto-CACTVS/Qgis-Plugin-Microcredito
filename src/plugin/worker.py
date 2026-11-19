@@ -79,7 +79,7 @@ class EnvironmentalWorker(QThread):
         try:
             self.cancel_event.clear()
             self.jobs.put(str(path))
-            loop.exec_()
+            loop.exec()
             result, error = response[0]
             if error:
                 raise RuntimeError(error)

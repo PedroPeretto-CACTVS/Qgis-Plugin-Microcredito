@@ -49,7 +49,7 @@ def _wait_for_job(job: UpdateProcess, timeout_ms: int = 30000) -> None:
     try:
         timeout.start(timeout_ms)
         if job.isRunning():
-            loop.exec_()
+            loop.exec()
     finally:
         timeout.stop()
     assert not job.isRunning(), "O processo externo não concluiu dentro do limite."
@@ -85,7 +85,7 @@ def test_real_qt_clicks_copy_prebuilt_bases_into_fixed_local_storage(
         update_window,
         "QSettings",
         lambda *_args, **_kwargs: QSettings(
-            str(tmp_path / "qsettings.ini"), QSettings.IniFormat
+            str(tmp_path / "qsettings.ini"), QSettings.Format.IniFormat
         ),
     )
     jobs: list[UpdateProcess] = []
@@ -117,10 +117,10 @@ def test_real_qt_clicks_copy_prebuilt_bases_into_fixed_local_storage(
             patch.object(QMessageBox, "critical") as critical,
             patch.object(QMessageBox, "information") as information,
             patch.object(
-                QMessageBox, "question", return_value=QMessageBox.Yes
+                QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
             ) as question,
         ):
-            QTest.mouseClick(window.refresh, Qt.LeftButton)
+            QTest.mouseClick(window.refresh, Qt.MouseButton.LeftButton)
             assert len(jobs) == 1
             _wait_for_job(jobs[-1])
             assert not failures, failures
@@ -134,7 +134,7 @@ def test_real_qt_clicks_copy_prebuilt_bases_into_fixed_local_storage(
             assert not fixed_root.exists(), "Validar não pode instalar bases."
             ticks_before_apply = len(ticks)
 
-            QTest.mouseClick(window.apply, Qt.LeftButton)
+            QTest.mouseClick(window.apply, Qt.MouseButton.LeftButton)
             assert len(jobs) == 2
             _wait_for_job(jobs[-1])
 
@@ -181,4 +181,4 @@ def test_real_qt_clicks_copy_prebuilt_bases_into_fixed_local_storage(
         window.activity_timer.stop()
         window.close()
         window.deleteLater()
-        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
