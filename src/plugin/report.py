@@ -28,7 +28,11 @@ from reportlab.platypus import (
 from qgis_plugin_microcredito.application.owner_documents import (
     validate_report_owner_documents,
 )
-from qgis_plugin_microcredito.application.pre_analysis import build_pre_analysis
+from qgis_plugin_microcredito.application.pre_analysis import (
+    TECHNICAL_DECISIONS,
+    build_pre_analysis,
+)
+from qgis_plugin_microcredito.application.technical_decision import has_current_technical_decision
 from qgis_plugin_microcredito.domain.policy import (
     aggregate,
     evaluate_lists,
@@ -408,8 +412,7 @@ def _report_payload(analysis: dict[str, object]) -> dict[str, object]:
     recorded_decision = payload.get("decisao_tecnica") or {}
     if (
         recorded_decision.get("codigo") not in (None, "", "pendente")
-        and recorded_decision.get("pre_analise_sha256")
-        != payload["pre_analise"].get("sha256")
+        and not has_current_technical_decision(payload)
     ):
         payload["decisao_tecnica_anterior_invalidada"] = {
             "motivo": (
@@ -765,13 +768,24 @@ def _pre_analysis_story(analysis: dict[str, object], styles):
     background = (
         PALE_GREEN if classification == "sem_indicio_impedimento" else PALE_YELLOW
     )
+    decision = analysis.get("decisao_tecnica") or {}
+    decision_code = str(decision.get("codigo") or "pendente")
+    decision_label = dict(TECHNICAL_DECISIONS).get(decision_code)
+    has_decision = has_current_technical_decision(analysis)
+    summary_label = "Decisão técnica registrada" if has_decision else "Resumo da pré-análise"
+    summary_result = (
+        decision_label if has_decision else pre_analysis.get("classificacao_geral_rotulo")
+    )
+    if has_decision:
+        # A human decision must not visually certify absence of automatic findings.
+        background = colors.whitesmoke
     story = [
         Table(
             [
                 [
-                    Paragraph("Resumo da pré-análise", s["Cell"]),
+                    Paragraph(summary_label, s["Cell"]),
                     Paragraph(
-                        f"<b>{_escape(pre_analysis.get('classificacao_geral_rotulo'))}</b>",
+                        f"<b>{_escape(summary_result)}</b>",
                         s["BodySmall"],
                     ),
                 ]
@@ -787,6 +801,21 @@ def _pre_analysis_story(analysis: dict[str, object], styles):
             ),
         ),
         Spacer(1, 2 * mm),
+        *(
+            [Paragraph(
+                "<b>Resultado automático da pré-análise:</b> "
+                f"{_escape(pre_analysis.get('classificacao_geral_rotulo'))}",
+                s["BodySmall"],
+            )] if has_decision else []
+        ),
+        *(
+            [Paragraph(
+                "<b>Avaliação manual do técnico.</b> Decisão registrada diretamente "
+                "na consulta, independentemente da pré-análise automática. "
+                "Os resultados automáticos são apresentados separadamente.",
+                s["BodySmall"],
+            )] if has_decision and decision.get("origem") == "analise_manual" else []
+        ),
         Paragraph(_escape(pre_analysis.get("resumo")), s["BodySmall"]),
         Paragraph("Entendimento das regras e conclusão preliminar", s["Section"]),
     ]

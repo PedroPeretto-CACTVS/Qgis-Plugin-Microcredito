@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
-from datetime import datetime
+from collections.abc import Callable
+from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,12 +19,14 @@ from qgis.core import (
     QgsGeometry,
     QgsLayerTreeGroup,
     QgsProject,
+    QgsReadWriteContext,
     QgsRendererCategory,
     QgsVectorLayer,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QSettings, Qt, QUrl, QVariant
+from qgis.PyQt.QtCore import QEvent, QSettings, Qt, QUrl, QVariant
 from qgis.PyQt.QtGui import QColor, QDesktopServices, QIcon
+from qgis.PyQt.QtXml import QDomDocument
 from qgis.PyQt.QtWidgets import (
     QAction,
     QApplication,
@@ -60,6 +65,7 @@ from qgis_plugin_microcredito.domain.policy import (
 from qgis_plugin_microcredito.domain.fiscal_modules import assess_car_fiscal_modules
 from qgis_plugin_microcredito.application.pre_analysis import (
     PRE_ANALYSIS_LABELS,
+    RULES_VERSION,
     TECHNICAL_DECISIONS,
     build_pre_analysis,
 )
@@ -74,13 +80,25 @@ from qgis_plugin_microcredito.domain.financing import (
     suggest_resource_source,
 )
 
+from qgis_plugin_microcredito.application.hashing import file_sha256
+from qgis_plugin_microcredito.infrastructure.consultation_revision import (
+    consultation_revision,
+)
+
+from .pre_analysis_window import build_pre_analysis_dialog
+from .technical_decision_panel import TechnicalDecisionPanel
 from .analysis import default_sources
 from .base_access import with_base_access
+from qgis_plugin_microcredito.infrastructure.base_access import (
+    BaseAccessBusy,
+    read_base_access,
+)
 from .car_source import (
     add_google_satellite,
     car_feature_context,
     coordinates_from_google_maps_url,
     export_car_feature,
+    exported_car_context,
     find_car_feature,
     find_cars_by_point,
     normalize_car,
@@ -234,7 +252,11 @@ class SearchWindow(QDialog):
         self._focus_after_processing = None
         self._owner_needed = False
         self.last_analysis = None
+        self._last_analysis_input_key = None
+        self._pre_analysis_snapshot = None
+        self._pre_analysis_snapshot_key = None
         self._technical_decision = None
+        self._technical_decision_input_key = None
         self._technical_decision_car = ""
         self.settings = QSettings("Cactvs", "CARMicrocredito")
         self.local_paths = default_local_data_paths()
@@ -482,6 +504,7 @@ class SearchWindow(QDialog):
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setSpacing(8)
         top_layout.addWidget(query_group)
+        self._install_decision_panel(top_layout)
         top_scroll = QScrollArea()
         top_scroll.setWidgetResizable(True)
         top_scroll.setFrameShape(QFrame.NoFrame)
@@ -594,7 +617,7 @@ class SearchWindow(QDialog):
         self.processing_bar.show()
         for control in self.interactive_controls:
             control.setEnabled(False)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         QApplication.processEvents()
 
     def _set_processing_outcome(self, message: str, focus=None):
@@ -657,6 +680,14 @@ class SearchWindow(QDialog):
             control.setEnabled(True)
         for control in getattr(self, "_input_controls", []):
             control.setEnabled(True)
+        self._refresh_consultation_decision()
+        self.decision_panel.set_ready(bool(normalize_car(self.car.text())))
+        if self._technical_decision and self._technical_decision.get("origem") == "analise_manual":
+            self.decision_panel.show_analysis(
+                (self.last_analysis or {}).get("pre_analise") or {},
+                self._technical_decision, ready=bool(normalize_car(self.car.text())),
+                reset_editor=False,
+            )
         if self._focus_after_processing is not None:
             self.top_scroll.ensureWidgetVisible(
                 self._focus_after_processing, 24, 24
@@ -863,7 +894,11 @@ class SearchWindow(QDialog):
         self.program.setCurrentIndex(0)
         self._set_owner_required(False)
         self.last_analysis = None
+        self._last_analysis_input_key = None
+        self._pre_analysis_snapshot = None
+        self._pre_analysis_snapshot_key = None
         self._technical_decision = None
+        self._technical_decision_input_key = None
         self._technical_decision_car = ""
         self.results = []
         self._fill_table()
@@ -1030,6 +1065,8 @@ class SearchWindow(QDialog):
                 "CAR preenchido a partir da operação selecionada. Clique em Consultar lista MMA/MCR.",
                 "neutral",
             )
+
+        self._refresh_consultation_decision()
 
     @with_base_access
     def load_selected_plots(self):
@@ -1251,147 +1288,195 @@ class SearchWindow(QDialog):
             "inconclusivo": "Inconclusivo",
         }.get(str(value), str(value or "Não informado"))
 
+    def _install_decision_panel(self, layout: QVBoxLayout) -> None:
+        self.decision_panel = TechnicalDecisionPanel(self)
+        layout.addWidget(self.decision_panel)
+        self.interactive_controls.extend(self.decision_panel.controls)
+        for field in (self.car, self.document, self.owner_document):
+            field.textChanged.connect(self._invalidate_technical_decision)
+        for combo in (self.fund, self.program):
+            combo.currentIndexChanged.connect(self._invalidate_technical_decision)
+        self.decision_panel.submitted.connect(
+            lambda code, label, text: self.register_consultation_decision(
+                code, label, text
+            )
+        )
+
+    def _invalidate_technical_decision(self) -> None:
+        self.last_analysis = None
+        self._last_analysis_input_key = None
+        self._technical_decision = None
+        self._technical_decision_input_key = None
+        self._technical_decision_car = ""
+        self.decision_panel.show_analysis({}, {}, ready=bool(normalize_car(self.car.text())) and not self._busy_depth)
+
+    def _refresh_consultation_decision(self) -> None:
+        if self._busy_depth:
+            return
+        manual = bool(
+            self._technical_decision
+            and self._technical_decision.get("origem") == "analise_manual"
+        )
+        if manual and self._technical_decision_input_key != self._manual_decision_key():
+            self._invalidate_technical_decision()
+            return
+        if self.last_analysis is None:
+            return
+        try:
+            with read_base_access(self.local_paths.root):
+                current = self._analysis_is_current(self.last_analysis)
+        except BaseAccessBusy:
+            current = False
+        if not current:
+            if manual:
+                self.last_analysis = None
+                self._last_analysis_input_key = None
+                self.decision_panel.show_analysis(
+                    {}, self._technical_decision or {},
+                    ready=bool(normalize_car(self.car.text())),
+                )
+            else:
+                self._invalidate_technical_decision()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if (
+            event.type() == QEvent.Type.ActivationChange
+            and self.isActiveWindow()
+            and hasattr(self, "decision_panel")
+        ):
+            self._refresh_consultation_decision()
+
+    def _analysis_is_current(self, analysis: dict[str, object]) -> bool:
+        if (
+            analysis is not self.last_analysis
+            or self._last_analysis_input_key is None
+            or self._last_analysis_input_key != self._pre_analysis_input_key(
+                self._selected_result()
+            )
+        ):
+            return False
+        try:
+            return file_sha256(analysis["geometria_empreendimento"]) == (
+                analysis["evidencia_geometria"]["sha256"]
+            )
+        except OSError:
+            return False
+
+    def _manual_decision_key(self) -> tuple[object, ...]:
+        result = self._selected_result()
+        if not compatible_operation(result, self.car.text()):
+            result = None
+        return (
+            normalize_car(self.car.text()), self.document.text().strip(),
+            self.owner_document.text().strip(), self.fund.currentData(),
+            self.program.currentData(), json.dumps(result, sort_keys=True, default=str),
+            date.today().isoformat(),
+        )
+
+    def _manual_context_digest(self) -> str:
+        return hashlib.sha256(
+            json.dumps(self._manual_decision_key(), default=str).encode("utf-8")
+        ).hexdigest()
+
+    def _decision_record(
+        self, code: str, text: str, parent: QWidget
+    ) -> dict[str, object] | None:
+        label = dict(TECHNICAL_DECISIONS).get(code)
+        if label is None:
+            return None
+        text = text.strip()
+        if code != "pendente" and len(text) < 15:
+            QMessageBox.information(
+                parent, "Justificativa necessária",
+                "Descreva o fundamento da decisão técnica com pelo menos 15 caracteres.",
+            )
+            return None
+        return {
+            "codigo": code, "rotulo": label, "justificativa": text,
+            "registrada_em": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "responsabilidade": (
+                "Decisão humana do técnico; não produzida automaticamente pela ferramenta."
+            ),
+        }
+
+    def register_consultation_decision(self, code: str, label: str, text: str) -> None:
+        if not normalize_car(self.car.text()) or self._busy_depth:
+            return
+        recorded = self._decision_record(code, text, self)
+        if recorded is None:
+            return
+        self._refresh_consultation_decision()
+        recorded.update({
+            "origem": "analise_manual", "car": self.car.text().strip(),
+            "contexto_manual_sha256": self._manual_context_digest(),
+        })
+        self._technical_decision = recorded
+        self._technical_decision_input_key = self._manual_decision_key()
+        self._technical_decision_car = normalize_car(self.car.text())
+        pre_analysis = {}
+        if self.last_analysis is not None:
+            self.last_analysis["decisao_tecnica"] = recorded
+            self.last_analysis["contexto_decisao_manual_sha256"] = recorded["contexto_manual_sha256"]
+            pre_analysis = self.last_analysis.get("pre_analise") or {}
+        self.decision_panel.show_analysis(pre_analysis, recorded, ready=True)
+
+    def _record_technical_decision(
+        self, analysis: dict[str, object], code: str, label: str, text: str,
+        parent: QWidget,
+    ) -> bool:
+        if not self._analysis_is_current(analysis):
+            self._last_analysis_input_key = None
+            self._technical_decision = None
+            self._technical_decision_input_key = None
+            self._technical_decision_car = ""
+            self.decision_panel.show_analysis({}, {}, ready=False)
+            QMessageBox.information(
+                parent, "Pré-análise desatualizada",
+                "Os dados ou a validade da consulta mudaram. Execute a pré-análise "
+                "novamente antes de registrar a decisão.",
+            )
+            return False
+        recorded = self._decision_record(code, text, parent)
+        if recorded is None:
+            return False
+        recorded["origem"] = "pre_analise_automatica"
+        recorded["pre_analise_sha256"] = analysis["pre_analise"].get("sha256")
+        self._technical_decision = recorded
+        self._technical_decision_input_key = self._last_analysis_input_key
+        self._technical_decision_car = normalize_car(analysis.get("car"))
+        analysis["decisao_tecnica"] = recorded
+        self.last_analysis = analysis
+        self.decision_panel.show_analysis(
+            analysis["pre_analise"], recorded, ready=not self._busy_depth
+        )
+        return True
+
     def _pre_analysis_dialog(self, analysis: dict[str, object]) -> QDialog:
         pre_analysis = analysis.get("pre_analise") or build_pre_analysis(analysis)
         analysis["pre_analise"] = pre_analysis
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Pré-análise normativa para decisão técnica")
-        dialog.setMinimumSize(820, 520)
-        dialog.resize(1160, 700)
 
-        layout = QVBoxLayout(dialog)
-        title = QLabel("Pré-análise das regras para apoio à decisão")
-        title.setObjectName("title")
-        layout.addWidget(title)
-        summary = QLabel(
-            f"<b>{pre_analysis.get('classificacao_geral_rotulo')}</b><br>"
-            f"{pre_analysis.get('resumo')}"
+        def register_decision(code: str, label: str, text: str) -> bool:
+            return self._record_technical_decision(analysis, code, label, text, dialog)
+
+        dialog = build_pre_analysis_dialog(
+            self,
+            pre_analysis,
+            analysis.get("decisao_tecnica") or {},
+            register_decision,
         )
-        summary.setObjectName("preAnalysisSummary")
-        summary.setWordWrap(True)
-        summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(summary)
-
-        explanation = QLabel(
-            "A ferramenta interpreta cada fonte e aponta possíveis impedimentos, "
-            "lacunas ou ausência de indício. Ela não decide a contratação."
-        )
-        explanation.setObjectName("notice")
-        explanation.setWordWrap(True)
-        layout.addWidget(explanation)
-
-        columns = (
-            "Regra/fonte",
-            "Conclusão preliminar",
-            "Entendimento e fundamento",
-            "Providência do técnico",
-        )
-        rules = list(pre_analysis.get("regras") or [])
-        table = QTableWidget(len(rules), len(columns))
-        table.setObjectName("preAnalysisTable")
-        table.setHorizontalHeaderLabels(columns)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
-        table.verticalHeader().setVisible(False)
-        backgrounds = {
-            "possivel_impedimento": QColor("#FDECEC"),
-            "sem_indicio_impedimento": QColor("#EAF5EF"),
-            "inconclusivo": QColor("#FFF5D6"),
-            "validacao_tecnica": QColor("#EAF1FB"),
-        }
-        for row, item in enumerate(rules):
-            result_code = str(item.get("classificacao") or "inconclusivo")
-            foundation = (
-                f"{item.get('entendimento_regra', '')} Resultado desta consulta: "
-                f"{item.get('fundamento_resultado', '')}"
-            )
-            values = (
-                item.get("regra"),
-                item.get("classificacao_rotulo"),
-                foundation,
-                item.get("providencia_tecnica"),
-            )
-            background = backgrounds.get(result_code, QColor("#FFFFFF"))
-            for column, value in enumerate(values):
-                cell = QTableWidgetItem(str(value or ""))
-                cell.setBackground(background)
-                reference = str(item.get("referencia") or "")
-                cell.setToolTip(
-                    str(value or "")
-                    + (f"\n\nReferência: {reference}" if reference else "")
-                )
-                table.setItem(row, column, cell)
-        header = table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.Stretch)
-        table.resizeRowsToContents()
-        layout.addWidget(table, 1)
-
-        decision_group = QGroupBox("Decisão do técnico responsável pela contratação")
-        decision_form = QFormLayout(decision_group)
-        decision = QComboBox()
-        decision.setObjectName("technicalDecisionCombo")
-        for code, label in TECHNICAL_DECISIONS:
-            decision.addItem(label, code)
-        justification = QPlainTextEdit()
-        justification.setObjectName("technicalDecisionJustification")
-        justification.setPlaceholderText(
-            "Registre documentos, exceções, condicionantes e fundamento da decisão."
-        )
-        justification.setMaximumHeight(85)
-        existing = analysis.get("decisao_tecnica") or {}
-        existing_index = decision.findData(str(existing.get("codigo") or "pendente"))
-        decision.setCurrentIndex(existing_index if existing_index >= 0 else 0)
-        justification.setPlainText(str(existing.get("justificativa") or ""))
-        decision_form.addRow("Conclusão", decision)
-        decision_form.addRow("Justificativa", justification)
-        layout.addWidget(decision_group)
-
-        actions = QHBoxLayout()
-        actions.addStretch(1)
-        close = QPushButton("Fechar sem alterar")
-        close.clicked.connect(dialog.reject)
-        actions.addWidget(close)
-        register = QPushButton("Registrar decisão técnica")
-        register.setObjectName("primary")
-
-        def register_decision() -> None:
-            code = str(decision.currentData() or "pendente")
-            text = justification.toPlainText().strip()
-            if code != "pendente" and len(text) < 15:
-                QMessageBox.information(
-                    dialog,
-                    "Justificativa necessária",
-                    "Descreva o fundamento da decisão técnica com pelo menos 15 caracteres.",
-                )
-                return
-            recorded = {
-                "codigo": code,
-                "rotulo": decision.currentText(),
-                "justificativa": text,
-                "registrada_em": datetime.now().astimezone().isoformat(
-                    timespec="seconds"
-                ),
-                "pre_analise_sha256": pre_analysis.get("sha256"),
-                "responsabilidade": (
-                    "Decisão humana do técnico; não produzida automaticamente pela ferramenta."
-                ),
-            }
-            self._technical_decision = recorded
-            self._technical_decision_car = normalize_car(analysis.get("car"))
-            analysis["decisao_tecnica"] = recorded
-            self.last_analysis = analysis
-            dialog.accept()
-
-        register.clicked.connect(register_decision)
-        actions.addWidget(register)
-        layout.addLayout(actions)
         return dialog
 
     def _show_pre_analysis(self, analysis: dict[str, object]) -> None:
-        self._pre_analysis_dialog(analysis).exec()
+        # Reading and recording a decision are interactive, not processing work.
+        waiting = bool(self._busy_depth)
+        if waiting:
+            QApplication.restoreOverrideCursor()
+        try:
+            self._pre_analysis_dialog(analysis).exec()
+        finally:
+            if waiting:
+                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
     def _interference_preview_dialog(self, analysis: dict[str, object]) -> QDialog:
         dialog = QDialog(self)
@@ -1481,6 +1566,239 @@ class SearchWindow(QDialog):
     def _show_interference_preview(self, analysis: dict[str, object]):
         self._interference_preview_dialog(analysis).exec()
 
+    def _pre_analysis_input_key(
+        self, result: dict[str, object] | None
+    ) -> tuple[object, ...] | None:
+        if not compatible_operation(result, self.car.text()):
+            result = None
+        try:
+            context_document = QDomDocument()
+            context_element = context_document.createElement("transform-context")
+            context_document.appendChild(context_element)
+            QgsProject.instance().transformContext().writeXml(
+                context_element, QgsReadWriteContext()
+            )
+            return (
+                str(self.local_paths.root.resolve()),
+                self.car.text().strip(),
+                self.document.text().strip(),
+                self.owner_document.text().strip(),
+                self.fund.currentData(),
+                self.program.currentData(),
+                json.dumps(result, sort_keys=True, default=str),
+                RULES_VERSION,
+                context_document.toString(),
+                date.today(),
+                consultation_revision(self.local_paths.root),
+            )
+        except OSError:
+            return None
+
+    def _reusable_pre_analysis(
+        self, snapshot_key: tuple[object, ...] | None
+    ) -> dict[str, object] | None:
+        if (
+            snapshot_key is None
+            or snapshot_key != self._pre_analysis_snapshot_key
+            or self._pre_analysis_snapshot is None
+        ):
+            return None
+        analysis = copy.deepcopy(self._pre_analysis_snapshot)
+        try:
+            if file_sha256(analysis["geometria_empreendimento"]) != (
+                analysis["evidencia_geometria"]["sha256"]
+            ):
+                return None
+        except OSError:
+            return None
+        analysis.pop("decisao_tecnica", None)
+        return analysis
+
+    def _build_selected_analysis(
+        self,
+        result: dict[str, object] | None,
+        resource_source: str,
+        resource_source_mode: str,
+        resource_source_state: str,
+        before_spatial_analysis: Callable[[], bool],
+    ) -> dict[str, object] | None:
+        (
+            _,
+            _,
+            _,
+            build_glebas_geojson,
+            find_mma_mcr_by_car,
+            find_documents_by_car,
+            find_by_car,
+            find_slave_labor_by_documents,
+        ) = _load_core()
+        connection = self._connection()
+        try:
+            self._processing_step(
+                "Consultando operações, CPF/CNPJ e listas regulatórias…"
+            )
+            operations = find_by_car(connection, self.car.text())
+            if result is None and len(operations) == 1:
+                result = operations[0]
+            collection = {"type": "FeatureCollection", "features": []}
+            mma = find_mma_mcr_by_car(connection, self.car.text())
+            associated_documents = find_documents_by_car(
+                connection, self.car.text()
+            )
+            manual_raw = self.owner_document.text().strip()
+            manual_document = self._normalized_owner_document()
+            if manual_raw and not manual_document:
+                self._set_owner_required(True)
+                self._set_processing_outcome(
+                    "Relatório não gerado: informe 11 dígitos para CPF ou "
+                    "14 dígitos para CNPJ do proprietário/possuidor.",
+                    self.owner_document,
+                )
+                QMessageBox.information(
+                    self,
+                    "CPF/CNPJ inválido",
+                    "Informe 11 dígitos para CPF ou 14 dígitos para CNPJ do proprietário/possuidor.",
+                )
+                return
+            if manual_document:
+                associated_documents.append(
+                    {
+                        "car_original": self.car.text().strip(),
+                        "ref_bacen": "",
+                        "nu_ordem": "",
+                        "documento_original": manual_raw,
+                        "documento_normalizado": manual_document,
+                        "documento_mascarado": 0,
+                        "tipo_vinculo": (
+                            "proprietario_possuidor_informado_manualmente"
+                        ),
+                        "base_origem": "INFORMACAO_DO_USUARIO",
+                        "arquivo": "",
+                        "importado_em": "",
+                    }
+                )
+            try:
+                owner_documents = require_owner_documents(associated_documents)
+            except ValueError as exc:
+                self._set_owner_required(True)
+                self._set_processing_outcome(
+                    "Relatório não gerado: informe o CPF/CNPJ completo do "
+                    "proprietário/possuidor no campo destacado em vermelho.",
+                    self.owner_document,
+                )
+                QMessageBox.information(
+                    self,
+                    "Proprietário/possuidor necessário",
+                    str(exc),
+                )
+                return
+            self._set_owner_required(False)
+            consulted_mte_documents = documents_for_mte(
+                associated_documents,
+                self.document.text(),
+                self.owner_document.text(),
+            )
+            slave_labor = find_slave_labor_by_documents(
+                connection,
+                consulted_mte_documents,
+            )
+            database_evidence = collect_database_evidence(connection)
+        finally:
+            connection.close()
+        if not before_spatial_analysis():
+            return None
+        result = result or {
+            "ref_bacen": "",
+            "nu_ordem": "",
+            "estado": "",
+            "municipio_ibge": "",
+        }
+        project_root = self.local_paths.root
+        geo_dir = project_root / "resultados"
+        geo_dir.mkdir(parents=True, exist_ok=True)
+        safe_key = normalize_car(self.car.text()) + "_" + uuid4().hex[:12]
+        target_path = geo_dir / f"gleba_car_{safe_key}.geojson"
+        car_geometry = self._car_geometry(geo_dir)
+        if car_geometry:
+            target_path = car_geometry
+            geometry_origin = "poligono_cadastral_sicar"
+            geometry_source = geometry_source_from_geojson(target_path)
+        else:
+            selected = (
+                result
+                if compatible_operation(result, self.car.text())
+                else unique_operation(operations, self.car.text())
+            )
+            if selected:
+                result = selected
+                connection = self._connection()
+                try:
+                    collection = build_glebas_geojson(
+                        connection,
+                        str(result["ref_bacen"]),
+                        str(result.get("nu_ordem") or ""),
+                    )
+                finally:
+                    connection.close()
+            if not collection["features"]:
+                QMessageBox.information(
+                    self,
+                    "Análise inconclusiva",
+                    "Não foi localizado polígono na base cadastral do CAR nem gleba válida para esta operação.",
+                )
+                return
+            target_path.write_text(
+                json.dumps(collection, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            geometry_origin = "gleba_operacao_sicor"
+            geometry_source = str(result.get("arquivo") or "")
+        self._processing_step(
+            "Cruzando o imóvel com as bases socioambientais nacionais…"
+        )
+        environmental = run_environment(
+            target_path,
+            default_sources(self.local_paths.environmental),
+        )
+        self._processing_step(
+            "Cruzamentos territoriais concluídos. Preparando o mapa…"
+        )
+        source_results = evaluate_lists(
+            mma, slave_labor, database_evidence, associated_documents
+        )
+        fiscal_module = assess_car_fiscal_modules(
+            self.car.text(),
+            exported_car_context(target_path, self.car.text()) if car_geometry else {},
+            mma
+        )
+        overall = aggregate(
+            [environmental["resultado_geral"], *source_results.values()]
+        )
+        analysis = {
+            "resultado_geral": overall,
+            "resultado_fontes": source_results,
+            "car": self.car.text().strip(),
+            "operacao": result,
+            "mma_mcr": mma,
+            "documentos_associados": associated_documents,
+            "documentos_proprietario_possuidor": owner_documents,
+            "trabalho_escravo": slave_labor,
+            "ambiental": environmental,
+            "geometria_empreendimento": str(target_path),
+            "origem_geometria": geometry_origin,
+            "fonte_geometria": geometry_source,
+            "evidencia_geometria": file_evidence(target_path),
+            "documentos_consultados_mte": consulted_mte_documents,
+            "fundo_constitucional": resource_source,
+            "fonte_recursos_modo": resource_source_mode,
+            "fonte_recursos_uf": resource_source_state,
+            "programa_financiamento": str(self.program.currentData() or ""),
+            "modulo_fiscal": fiscal_module,
+            **database_evidence,
+        }
+        analysis["pre_analise"] = build_pre_analysis(analysis)
+        return analysis
+
     @with_base_access
     def analyze_selected(self, mode: str = "final"):
         result = self._selected_result()
@@ -1503,202 +1821,91 @@ class SearchWindow(QDialog):
             )
             self.fund.setFocus()
             return
+        snapshot_key = self._pre_analysis_input_key(result)
+        analysis = self._reusable_pre_analysis(snapshot_key)
         selected_report_dir = None
+
+        def select_output() -> bool:
+            nonlocal selected_report_dir
+            if mode != "final" or selected_report_dir is not None:
+                return True
+            selected_report_dir = self._select_report_directory()
+            if selected_report_dir is None:
+                self._set_processing_outcome(
+                    "Relatório não gerado: seleção da pasta de destino cancelada."
+                )
+                return False
+            return True
+
         self._begin_processing("Preparando os dados da análise…")
         try:
-            (
-                _,
-                _,
-                _,
-                build_glebas_geojson,
-                find_mma_mcr_by_car,
-                find_documents_by_car,
-                find_by_car,
-                find_slave_labor_by_documents,
-            ) = _load_core()
-            connection = self._connection()
-            try:
-                self._processing_step(
-                    "Consultando operações, CPF/CNPJ e listas regulatórias…"
-                )
-                operations = find_by_car(connection, self.car.text())
-                if result is None and len(operations) == 1:
-                    result = operations[0]
-                collection = {"type": "FeatureCollection", "features": []}
-                mma = find_mma_mcr_by_car(connection, self.car.text())
-                associated_documents = find_documents_by_car(
-                    connection, self.car.text()
-                )
-                manual_raw = self.owner_document.text().strip()
-                manual_document = self._normalized_owner_document()
-                if manual_raw and not manual_document:
-                    self._set_owner_required(True)
-                    self._set_processing_outcome(
-                        "Relatório não gerado: informe 11 dígitos para CPF ou "
-                        "14 dígitos para CNPJ do proprietário/possuidor.",
-                        self.owner_document,
-                    )
-                    QMessageBox.information(
-                        self,
-                        "CPF/CNPJ inválido",
-                        "Informe 11 dígitos para CPF ou 14 dígitos para CNPJ do proprietário/possuidor.",
-                    )
+            if analysis is not None:
+                if not select_output():
                     return
-                if manual_document:
-                    associated_documents.append(
-                        {
-                            "car_original": self.car.text().strip(),
-                            "ref_bacen": "",
-                            "nu_ordem": "",
-                            "documento_original": manual_raw,
-                            "documento_normalizado": manual_document,
-                            "documento_mascarado": 0,
-                            "tipo_vinculo": (
-                                "proprietario_possuidor_informado_manualmente"
-                            ),
-                            "base_origem": "INFORMACAO_DO_USUARIO",
-                            "arquivo": "",
-                            "importado_em": "",
-                        }
-                    )
-                try:
-                    owner_documents = require_owner_documents(associated_documents)
-                except ValueError as exc:
-                    self._set_owner_required(True)
-                    self._set_processing_outcome(
-                        "Relatório não gerado: informe o CPF/CNPJ completo do "
-                        "proprietário/possuidor no campo destacado em vermelho.",
-                        self.owner_document,
-                    )
-                    QMessageBox.information(
-                        self,
-                        "Proprietário/possuidor necessário",
-                        str(exc),
-                    )
+                # A native folder prompt can remain open across a validity date.
+                current_key = self._pre_analysis_input_key(result)
+                snapshot_key = current_key
+                analysis = self._reusable_pre_analysis(current_key)
+            if analysis is None:
+                self._pre_analysis_snapshot = None
+                self._pre_analysis_snapshot_key = None
+                analysis = self._build_selected_analysis(
+                    result, resource_source, resource_source_mode, resource_source_state,
+                    select_output,
+                )
+                if analysis is None:
                     return
-                self._set_owner_required(False)
-                consulted_mte_documents = documents_for_mte(
-                    associated_documents,
-                    self.document.text(),
-                    self.owner_document.text(),
-                )
-                slave_labor = find_slave_labor_by_documents(
-                    connection,
-                    consulted_mte_documents,
-                )
-                database_evidence = collect_database_evidence(connection)
-            finally:
-                connection.close()
-            if mode == "final":
-                selected_report_dir = self._select_report_directory()
-                if selected_report_dir is None:
-                    self._set_processing_outcome(
-                        "Relatório não gerado: seleção da pasta de destino cancelada."
+                if (
+                    snapshot_key is not None
+                    and snapshot_key == self._pre_analysis_input_key(
+                        self._selected_result()
                     )
-                    return
-            result = result or {
-                "ref_bacen": "",
-                "nu_ordem": "",
-                "estado": "",
-                "municipio_ibge": "",
-            }
-            project_root = self.local_paths.root
-            geo_dir = project_root / "resultados"
-            geo_dir.mkdir(parents=True, exist_ok=True)
-            safe_key = normalize_car(self.car.text()) + "_" + uuid4().hex[:12]
-            target_path = geo_dir / f"gleba_car_{safe_key}.geojson"
-            car_geometry = self._car_geometry(geo_dir)
-            if car_geometry:
-                target_path = car_geometry
-                geometry_origin = "poligono_cadastral_sicar"
-                geometry_source = geometry_source_from_geojson(target_path)
-            else:
-                selected = (
-                    result
-                    if compatible_operation(result, self.car.text())
-                    else unique_operation(operations, self.car.text())
-                )
-                if selected:
-                    result = selected
-                    connection = self._connection()
-                    try:
-                        collection = build_glebas_geojson(
-                            connection,
-                            str(result["ref_bacen"]),
-                            str(result.get("nu_ordem") or ""),
-                        )
-                    finally:
-                        connection.close()
-                if not collection["features"]:
-                    QMessageBox.information(
-                        self,
-                        "Análise inconclusiva",
-                        "Não foi localizado polígono na base cadastral do CAR nem gleba válida para esta operação.",
+                    and all(
+                        item.get("resultado") != "inconclusivo"
+                        for item in analysis.get("ambiental", {}).get("camadas", [])
                     )
-                    return
-                target_path.write_text(
-                    json.dumps(collection, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                geometry_origin = "gleba_operacao_sicor"
-                geometry_source = str(result.get("arquivo") or "")
-            self._processing_step(
-                "Cruzando o imóvel com as bases socioambientais nacionais…"
-            )
-            environmental = run_environment(
-                target_path,
-                default_sources(self.local_paths.environmental),
-            )
-            self._processing_step(
-                "Cruzamentos territoriais concluídos. Preparando o mapa…"
-            )
-            source_results = evaluate_lists(
-                mma, slave_labor, database_evidence, associated_documents
-            )
-            fiscal_module = assess_car_fiscal_modules(
-                self.car.text(), self._local_car_context(), mma
-            )
-            overall = aggregate(
-                [environmental["resultado_geral"], *source_results.values()]
-            )
-            analysis = {
-                "resultado_geral": overall,
-                "resultado_fontes": source_results,
-                "car": self.car.text().strip(),
-                "operacao": result,
-                "mma_mcr": mma,
-                "documentos_associados": associated_documents,
-                "documentos_proprietario_possuidor": owner_documents,
-                "trabalho_escravo": slave_labor,
-                "ambiental": environmental,
-                "geometria_empreendimento": str(target_path),
-                "origem_geometria": geometry_origin,
-                "fonte_geometria": geometry_source,
-                "evidencia_geometria": file_evidence(target_path),
-                "documentos_consultados_mte": consulted_mte_documents,
-                "fundo_constitucional": resource_source,
-                "fonte_recursos_modo": resource_source_mode,
-                "fonte_recursos_uf": resource_source_state,
-                "programa_financiamento": str(self.program.currentData() or ""),
-                "modulo_fiscal": fiscal_module,
-                **database_evidence,
-            }
-            analysis["pre_analise"] = build_pre_analysis(analysis)
+                ):
+                    # Keep data only, releasing all providers before ending the lease.
+                    self._pre_analysis_snapshot = copy.deepcopy(analysis)
+                    self._pre_analysis_snapshot_key = snapshot_key
             if (
                 self._technical_decision
+                and self._technical_decision_input_key == (
+                    self._manual_decision_key()
+                    if self._technical_decision.get("origem") == "analise_manual"
+                    else self._pre_analysis_input_key(self._selected_result())
+                )
                 and self._technical_decision_car == normalize_car(analysis.get("car"))
-                and self._technical_decision.get("pre_analise_sha256")
-                == analysis["pre_analise"].get("sha256")
+                and (
+                    self._technical_decision.get("origem") == "analise_manual"
+                    or self._technical_decision.get("pre_analise_sha256")
+                    == analysis["pre_analise"].get("sha256")
+                )
             ):
                 analysis["decisao_tecnica"] = dict(self._technical_decision)
+                if self._technical_decision.get("origem") == "analise_manual":
+                    analysis["contexto_decisao_manual_sha256"] = self._manual_context_digest()
             elif self._technical_decision_car == normalize_car(analysis.get("car")):
                 self._technical_decision = None
+                self._technical_decision_input_key = None
                 self._technical_decision_car = ""
             self.last_analysis = analysis
+            current_key = self._pre_analysis_input_key(self._selected_result())
+            self._last_analysis_input_key = (
+                current_key if current_key == snapshot_key else None
+            )
+            self.decision_panel.show_analysis(
+                analysis["pre_analise"], analysis.get("decisao_tecnica") or {},
+                ready=False,
+            )
+            self._focus_after_processing = self.decision_panel.result
             if mode in {"interferences", "pre_analysis"}:
                 self._processing_step("Abrindo a pré-análise normativa…")
                 self._show_pre_analysis(analysis)
                 return
+            project_root = self.local_paths.root
+            target_path = Path(analysis["geometria_empreendimento"])
+            safe_key = normalize_car(self.car.text()) + "_" + uuid4().hex[:12]
             report_dir = selected_report_dir or (project_root / "output" / "pdf")
             report_dir.mkdir(parents=True, exist_ok=True)
             preview_prefix = "previa_" if mode == "report_preview" else ""
